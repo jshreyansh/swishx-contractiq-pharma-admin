@@ -203,12 +203,24 @@ export interface Toast {
 
 export type RCStatus = 'DRAFT' | 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXPIRED';
 
+export type RCWorkflowStage =
+  | 'hospital_acceptance_pending'
+  | 'division_review'
+  | 'sent_back_to_field_rep'
+  | 'resubmitted'
+  | 'final_approval_pending'
+  | 'approved'
+  | 'final_rejected'
+  | 'discarded';
+
 export interface RateContract {
   id: string;
   rc_code: string;
   hospital_id: string;
   rep_id: string | null;
   status: RCStatus;
+  workflow_stage: RCWorkflowStage;
+  negotiation_round: number;
   valid_from: string;
   valid_to: string;
   total_value: number;
@@ -244,6 +256,7 @@ export interface RateContractApproval {
   status: 'pending' | 'approved' | 'rejected';
   rejection_reason: string;
   decided_at: string | null;
+  negotiation_round: number;
   division?: Division;
   approver_user?: AppUser;
 }
@@ -255,6 +268,24 @@ export interface RCTimeline {
   actor_role: string;
   action: string;
   action_type: string;
+  created_at: string;
+}
+
+export type RCItemHistoryActionType = 'proposed' | 'division_edit' | 'resubmitted' | 'final_edit';
+
+export interface RCItemHistory {
+  id: string;
+  rc_item_id: string;
+  rc_id: string;
+  negotiation_round: number;
+  actor_name: string;
+  actor_role: string;
+  action_type: RCItemHistoryActionType;
+  price_before: number | null;
+  price_after: number;
+  qty_before: number | null;
+  qty_after: number;
+  notes: string | null;
   created_at: string;
 }
 

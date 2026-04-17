@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { Order, DivisionApproval, OrderItem, RateContract, RateContractItem, RateContractApproval } from '../types';
-import { formatINR, formatDateTime, stageLabel, stageColor, rcStatusLabel, rcStatusColor } from '../utils/formatters';
+import { formatINR, formatDateTime, stageLabel, stageColor, rcStatusLabel, rcStatusColor, rcWorkflowStageLabel, rcWorkflowStageColor } from '../utils/formatters';
 import { syncOrderStageAfterDivisionDecision } from '../utils/orderWorkflow';
 import { getMutationError } from '../utils/supabaseWrites';
 import { useApp } from '../context/AppContext';
@@ -193,20 +193,22 @@ export default function DivisionWorkspace() {
       const { data: rcData } = await supabase
         .from('rate_contracts')
         .select('*, hospital:hospitals(*)')
-        .in('status', ['PENDING'])
+        .in('workflow_stage', ['division_review', 'resubmitted'])
         .order('updated_at', { ascending: false });
 
       if (!rcData) { setRCs([]); return; }
 
       const enriched: RCWithMyApproval[] = await Promise.all(
         rcData.map(async (rc) => {
+          const round = rc.negotiation_round || 1;
           const { data: divisionApprovals } = await supabase
             .from('rate_contract_approvals')
             .select('*')
             .eq('rc_id', rc.id)
             .eq('approval_stage', 'division')
-            .order('sequence_order')
-          const approvalToShow = divisionApprovals?.find((approval) => approval.status === 'pending') || divisionApprovals?.[0];
+            .eq('negotiation_round', round)
+            .order('sequence_order');
+          const approvalToShow = divisionApprovals?.find(a => a.status === 'pending') || divisionApprovals?.[0];
           const { data: allItems } = await supabase
             .from('rate_contract_items')
             .select('*, division:divisions(*)')
@@ -235,19 +237,21 @@ export default function DivisionWorkspace() {
       .from('rate_contracts')
       .select('*, hospital:hospitals(*)')
       .in('id', rcIds)
-      .in('status', ['PENDING'])
+      .in('workflow_stage', ['division_review', 'resubmitted'])
       .order('updated_at', { ascending: false });
 
     if (!rcData) { setRCs([]); return; }
 
     const enriched: RCWithMyApproval[] = await Promise.all(
       rcData.map(async (rc) => {
+        const round = rc.negotiation_round || 1;
         const { data: approval } = await supabase
           .from('rate_contract_approvals')
           .select('*')
           .eq('rc_id', rc.id)
           .eq('division_id', targetDivId || divisionId || '')
           .eq('approval_stage', 'division')
+          .eq('negotiation_round', round)
           .maybeSingle();
         const { data: myItems } = await supabase
           .from('rate_contract_items')
@@ -260,8 +264,45 @@ export default function DivisionWorkspace() {
     setRCs(enriched);
   }
 
+  async function checkAndAdvanceRCAfterDivisionDecision(rcId: string, round: number) {
+    const { data: allDivApprovals } = await supabase
+      .from('rate_contract_approvals')
+      .select('status')
+      .eq('rc_id', rcId)
+      .eq('approval_stage', 'division')
+      .eq('negotiation_round', round);
+
+    if (!allDivApprovals || allDivApprovals.length === 0) return;
+    if (allDivApprovals.some(a => a.status === 'pending')) return;
+
+    const allApproved = allDivApprovals.every(a => a.status === 'approved');
+    const now = new Date().toISOString();
+
+    if (allApproved) {
+      await supabase.from('rate_contracts').update({ workflow_stage: 'final_approval_pending', updated_at: now }).eq('id', rcId);
+      await supabase.from('rate_contract_timeline').insert({
+        rc_id: rcId, actor_name: 'System', actor_role: 'Workflow Engine',
+        action: 'All divisions approved. RC advanced to final approval queue.', action_type: 'stage_advanced',
+      });
+    } else {
+      const isLastRound = round >= 2;
+      const newStage = isLastRound ? 'final_rejected' : 'sent_back_to_field_rep';
+      const updates: Record<string, unknown> = { workflow_stage: newStage, updated_at: now };
+      if (isLastRound) updates.status = 'REJECTED';
+      await supabase.from('rate_contracts').update(updates).eq('id', rcId);
+      await supabase.from('rate_contract_timeline').insert({
+        rc_id: rcId, actor_name: 'System', actor_role: 'Workflow Engine',
+        action: isLastRound
+          ? 'Maximum negotiation rounds exhausted after division feedback. RC final rejected.'
+          : 'All divisions responded with suggested changes. RC sent back to field rep for resubmission.',
+        action_type: isLastRound ? 'final_rejected' : 'sent_back',
+      });
+    }
+  }
+
   async function handleRCApprove() {
     if (!selectedRC || !currentUser || !selectedRC.myApproval || currentRole !== 'division_approver') return;
+    const round = selectedRC.negotiation_round || 1;
     try {
       const approvalUpdate = await supabase.from('rate_contract_approvals').update({
         status: 'approved', approver_user_id: currentUser.id,
@@ -272,10 +313,12 @@ export default function DivisionWorkspace() {
 
       const timelineInsert = await supabase.from('rate_contract_timeline').insert({
         rc_id: selectedRC.id, actor_name: currentUser.name, actor_role: 'Division Approver',
-        action: `${currentUser.division?.name || 'Division'} approved RC items.`, action_type: 'division_approved',
+        action: `${currentUser.division?.name || 'Division'} approved RC items (Round ${round}).`, action_type: 'division_approved',
       }).select('id');
       const timelineInsertError = getMutationError(timelineInsert, 'RC history could not be updated after approval.');
       if (timelineInsertError) throw new Error(timelineInsertError);
+
+      await checkAndAdvanceRCAfterDivisionDecision(selectedRC.id, round);
 
       addToast({ type: 'success', title: 'RC Division Approved', message: `Your division approved ${selectedRC.rc_code}.` });
       setSelectedRC(null);
@@ -289,38 +332,35 @@ export default function DivisionWorkspace() {
     }
   }
 
-  async function handleRCReject() {
+  async function handleRCSendBack() {
     if (!selectedRC || !currentUser || !selectedRC.myApproval || !rcRejectReason.trim() || currentRole !== 'division_approver') return;
+    const round = selectedRC.negotiation_round || 1;
     try {
       const approvalUpdate = await supabase.from('rate_contract_approvals').update({
         status: 'rejected', rejection_reason: rcRejectReason, approver_user_id: currentUser.id,
         approver_name: currentUser.name, decided_at: new Date().toISOString(), updated_at: new Date().toISOString(),
       }).eq('id', selectedRC.myApproval.id).select('id');
-      const approvalUpdateError = getMutationError(approvalUpdate, 'The RC rejection could not be saved.');
+      const approvalUpdateError = getMutationError(approvalUpdate, 'The send-back could not be saved.');
       if (approvalUpdateError) throw new Error(approvalUpdateError);
-
-      const contractUpdate = await supabase.from('rate_contracts').update({
-        status: 'REJECTED',
-        updated_at: new Date().toISOString(),
-      }).eq('id', selectedRC.id).select('id');
-      const contractUpdateError = getMutationError(contractUpdate, 'The RC status could not be updated.');
-      if (contractUpdateError) throw new Error(contractUpdateError);
 
       const timelineInsert = await supabase.from('rate_contract_timeline').insert({
         rc_id: selectedRC.id, actor_name: currentUser.name, actor_role: 'Division Approver',
-        action: `${currentUser.division?.name || 'Division'} rejected: ${rcRejectReason}`, action_type: 'division_rejected',
+        action: `${currentUser.division?.name || 'Division'} requested changes (Round ${round}): ${rcRejectReason}`,
+        action_type: 'division_sent_back',
       }).select('id');
-      const timelineInsertError = getMutationError(timelineInsert, 'RC history could not be updated after rejection.');
+      const timelineInsertError = getMutationError(timelineInsert, 'RC history could not be updated after sending back.');
       if (timelineInsertError) throw new Error(timelineInsertError);
 
-      addToast({ type: 'warning', title: 'RC Rejected', message: `${selectedRC.rc_code} has been rejected.` });
+      await checkAndAdvanceRCAfterDivisionDecision(selectedRC.id, round);
+
+      addToast({ type: 'warning', title: 'Changes Requested', message: `${selectedRC.rc_code} sent back for renegotiation.` });
       setRCRejectModal(false); setRCRejectReason(''); setSelectedRC(null);
       loadDivisionRCs();
     } catch (error) {
       addToast({
         type: 'error',
-        title: 'Rejection Failed',
-        message: error instanceof Error ? error.message : 'The RC rejection could not be completed.',
+        title: 'Send Back Failed',
+        message: error instanceof Error ? error.message : 'The send-back could not be completed.',
       });
     }
   }
@@ -328,6 +368,8 @@ export default function DivisionWorkspace() {
   async function handleRCItemSave() {
     if (!editingRCItem || !selectedRC || !currentUser || currentRole !== 'division_approver') return;
     try {
+      const currentItem = selectedRC.myItems?.find(i => i.id === editingRCItem.id);
+
       const itemUpdate = await supabase.from('rate_contract_items').update({
         negotiated_price: editingRCItem.negotiated_price,
         expected_qty: editingRCItem.expected_qty,
@@ -335,6 +377,19 @@ export default function DivisionWorkspace() {
       }).eq('id', editingRCItem.id).select('id');
       const itemUpdateError = getMutationError(itemUpdate, 'RC item changes could not be saved.');
       if (itemUpdateError) throw new Error(itemUpdateError);
+
+      await supabase.from('rate_contract_item_history').insert({
+        rc_item_id: editingRCItem.id,
+        rc_id: selectedRC.id,
+        negotiation_round: selectedRC.negotiation_round || 1,
+        actor_name: currentUser.name,
+        actor_role: 'Division Approver',
+        action_type: 'division_edit',
+        price_before: currentItem?.negotiated_price ?? null,
+        price_after: editingRCItem.negotiated_price,
+        qty_before: currentItem?.expected_qty ?? null,
+        qty_after: editingRCItem.expected_qty,
+      });
 
       const timelineInsert = await supabase.from('rate_contract_timeline').insert({
         rc_id: selectedRC.id, actor_name: currentUser.name, actor_role: 'Division Approver',
@@ -798,6 +853,7 @@ export default function DivisionWorkspace() {
               </div>
             ) : visibleRCs.map(rc => {
               const isSel = selectedRC?.id === rc.id;
+              const isRound2 = (rc.negotiation_round || 1) >= 2;
               return (
                 <button key={rc.id} onClick={() => setSelectedRC(rc)}
                   className={`w-full text-left bg-white rounded-xl border shadow-card p-3.5 transition-all group ${
@@ -805,12 +861,15 @@ export default function DivisionWorkspace() {
                   }`}>
                   <div className="flex items-center justify-between mb-1.5">
                     <span className="font-mono text-[11px] font-bold text-ink-700">{rc.rc_code}</span>
-                    <Badge className={rc.myApproval?.status === 'pending' ? 'bg-orange-50 text-orange-600' : rc.myApproval?.status === 'approved' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}>
+                    <Badge className={rc.myApproval?.status === 'pending' ? 'bg-orange-50 text-orange-600' : rc.myApproval?.status === 'approved' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}>
                       {rc.myApproval?.status || 'pending'}
                     </Badge>
                   </div>
                   <p className="text-sm font-semibold text-ink-900">{rc.hospital?.name}</p>
                   <p className="text-[11px] text-ink-400 mt-0.5">{rc.myItems?.length ?? 0} item(s) for your division</p>
+                  {isRound2 && (
+                    <p className="text-[10px] font-semibold text-red-500 mt-1.5">⚠ Round 2 — Final negotiation</p>
+                  )}
                   <ChevronRight size={12} className={`ml-auto mt-1 transition-colors ${isSel ? 'text-brand-orange' : 'text-slate-300'}`} />
                 </button>
               );
@@ -830,13 +889,25 @@ export default function DivisionWorkspace() {
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="font-mono text-xs font-bold text-ink-800">{selectedRC.rc_code}</span>
-                      <Badge className={rcStatusColor(selectedRC.status)}>{rcStatusLabel(selectedRC.status)}</Badge>
+                      <Badge className={rcWorkflowStageColor(selectedRC.workflow_stage)}>{rcWorkflowStageLabel(selectedRC.workflow_stage)}</Badge>
+                      {(selectedRC.negotiation_round || 1) >= 2 && (
+                        <span className="text-[10px] font-bold bg-red-50 text-red-600 px-1.5 py-0.5 rounded">Round 2 · Final</span>
+                      )}
                     </div>
                     <p className="text-sm font-semibold text-ink-900 mt-0.5">{selectedRC.hospital?.name}</p>
                   </div>
-                  <button onClick={() => setSelectedRC(null)} className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-300 hover:text-ink-600 hover:bg-slate-100 transition-colors">
-                    <X size={14} />
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => navigate(`/rate-contracts/${selectedRC.id}`)}
+                      className="flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-brand-blue hover:text-brand-blue-dark hover:bg-blue-50 rounded-lg transition-colors"
+                      title="Open full RC detail page"
+                    >
+                      <ArrowUpRight size={12} /> Full RC
+                    </button>
+                    <button onClick={() => setSelectedRC(null)} className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-300 hover:text-ink-600 hover:bg-slate-100 transition-colors">
+                      <X size={14} />
+                    </button>
+                  </div>
                 </div>
 
                 {canEditRC && selectedRC.myApproval?.status === 'pending' && (
@@ -912,8 +983,8 @@ export default function DivisionWorkspace() {
                     </p>
                     <div className="flex items-center gap-2">
                       <button onClick={() => setRCRejectModal(true)}
-                        className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold border border-red-200 text-red-600 hover:bg-red-50 rounded-xl transition-colors">
-                        <XCircle size={14} /> Reject
+                        className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold border border-amber-200 text-amber-700 hover:bg-amber-50 rounded-xl transition-colors">
+                        <XCircle size={14} /> Send Back to Field Rep
                       </button>
                       <button onClick={handleRCApprove}
                         className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl transition-colors shadow-sm">
@@ -963,29 +1034,36 @@ export default function DivisionWorkspace() {
         </div>
       )}
 
-      {/* ── RC Reject modal ── */}
+      {/* ── RC Send Back modal ── */}
       {rcRejectModal && selectedRC && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
           <div className="bg-white rounded-2xl shadow-modal p-6 w-full max-w-sm border border-slate-100 animate-fade-in">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-base font-bold text-ink-900">RC Rejection Reason</h3>
+              <h3 className="text-base font-bold text-ink-900">Request Changes</h3>
               <button onClick={() => { setRCRejectModal(false); setRCRejectReason(''); }} className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-300 hover:text-ink-600 hover:bg-slate-100 transition-colors">
                 <X size={14} />
               </button>
             </div>
-            <p className="text-sm text-ink-500 mb-3">Rejecting <span className="font-semibold text-ink-800">{selectedRC.rc_code}</span></p>
+            <p className="text-sm text-ink-500 mb-1">
+              Sending <span className="font-semibold text-ink-800">{selectedRC.rc_code}</span> back to the field rep for renegotiation.
+            </p>
+            {(selectedRC.negotiation_round || 1) >= 2 && (
+              <p className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-3">
+                ⚠ This is Round 2. Sending back again will final-reject this RC — no further rounds are allowed.
+              </p>
+            )}
             <textarea
               value={rcRejectReason}
               onChange={e => setRCRejectReason(e.target.value)}
-              placeholder="e.g., Pricing not acceptable, product not stocked…"
-              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-300/40 focus:border-red-300 resize-none text-ink-900 placeholder:text-ink-400"
+              placeholder="e.g., Pricing too high, product SKU mismatch, quantities unrealistic…"
+              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300/40 focus:border-amber-300 resize-none text-ink-900 placeholder:text-ink-400 mt-3"
               rows={3} autoFocus
             />
             <div className="flex gap-2 mt-4">
               <button onClick={() => { setRCRejectModal(false); setRCRejectReason(''); }} className="flex-1 py-2 text-sm border border-slate-200 rounded-xl text-ink-600 hover:bg-slate-50 transition-colors">Cancel</button>
-              <button onClick={handleRCReject} disabled={!rcRejectReason.trim()}
-                className="flex-1 py-2 text-sm bg-red-600 text-white rounded-xl hover:bg-red-700 font-semibold disabled:opacity-50 transition-colors">
-                Confirm Reject
+              <button onClick={handleRCSendBack} disabled={!rcRejectReason.trim()}
+                className="flex-1 py-2 text-sm bg-amber-600 text-white rounded-xl hover:bg-amber-700 font-semibold disabled:opacity-50 transition-colors">
+                Send Back to Field Rep
               </button>
             </div>
           </div>

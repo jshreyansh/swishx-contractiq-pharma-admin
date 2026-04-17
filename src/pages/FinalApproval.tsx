@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { Order, OrderItem, FinalApproval as FinalApprovalType, RateContract, RateContractItem, RateContractApproval } from '../types';
-import { formatINR, formatDate, formatDateTime, timeAgo, stageColor, stageLabel, rcStatusLabel, rcStatusColor } from '../utils/formatters';
+import { formatINR, formatDate, formatDateTime, timeAgo, stageColor, stageLabel, rcStatusLabel, rcStatusColor, rcWorkflowStageLabel, rcWorkflowStageColor } from '../utils/formatters';
 import { useApp } from '../context/AppContext';
 import Badge from '../components/ui/Badge';
 import { getMutationError } from '../utils/supabaseWrites';
@@ -47,40 +47,11 @@ export default function FinalApproval() {
     if (detailScrollRef.current) detailScrollRef.current.scrollTop = 0;
   }, [selected?.id]);
 
-  async function isRCReadyForFinalApproval(rcId: string, allItems?: RateContractItem[]) {
-    const items = allItems ?? (
-      await supabase
-        .from('rate_contract_items')
-        .select('division_id')
-        .eq('rc_id', rcId)
-    ).data;
-
-    const requiredDivisionIds = [...new Set(
-      (items || [])
-        .map(item => item.division_id)
-        .filter((divisionId): divisionId is string => Boolean(divisionId))
-    )];
-
-    if (requiredDivisionIds.length === 0) return false;
-
-    const { data: divisionApprovals } = await supabase
-      .from('rate_contract_approvals')
-      .select('division_id, status')
-      .eq('rc_id', rcId)
-      .eq('approval_stage', 'division');
-
-    return requiredDivisionIds.every(divisionId =>
-      (divisionApprovals || []).some(
-        approval => approval.division_id === divisionId && approval.status !== 'pending'
-      )
-    );
-  }
-
   async function loadRCsForFinalApproval() {
     const { data: rcData } = await supabase
       .from('rate_contracts')
       .select('*, hospital:hospitals(*)')
-      .eq('status', 'PENDING')
+      .eq('workflow_stage', 'final_approval_pending')
       .order('updated_at', { ascending: false });
     if (!rcData) return;
 
@@ -89,8 +60,6 @@ export default function FinalApproval() {
         .from('rate_contract_items')
         .select('*, division:divisions(*)')
         .eq('rc_id', rc.id);
-      const readyForFinalApproval = await isRCReadyForFinalApproval(rc.id, allItems as RateContractItem[] | undefined);
-      if (!readyForFinalApproval) return null;
 
       const { data: myApproval } = currentUser
         ? await supabase.from('rate_contract_approvals').select('*')
@@ -108,15 +77,6 @@ export default function FinalApproval() {
 
   async function handleRCFinalApprove() {
     if (!selectedRC || !currentUser || !selectedRC.myApproval || currentRole !== 'final_approver') return;
-    const readyForFinalApproval = await isRCReadyForFinalApproval(selectedRC.id, selectedRC.allItems);
-    if (!readyForFinalApproval) {
-      addToast({
-        type: 'warning',
-        title: 'Division Review Pending',
-        message: 'Final approval is locked until every division on this RC has completed its review.',
-      });
-      return;
-    }
     try {
       const approvalUpdate = await supabase.from('rate_contract_approvals').update({
         status: 'approved', decided_at: new Date().toISOString(), updated_at: new Date().toISOString(),
@@ -132,6 +92,7 @@ export default function FinalApproval() {
       if (allApproved) {
         const contractUpdate = await supabase.from('rate_contracts').update({
           status: 'APPROVED',
+          workflow_stage: 'approved',
           updated_at: new Date().toISOString(),
         }).eq('id', selectedRC.id).select('id');
         const contractUpdateError = getMutationError(contractUpdate, 'The RC could not be marked as approved.');
@@ -169,15 +130,6 @@ export default function FinalApproval() {
 
   async function handleRCFinalReject() {
     if (!selectedRC || !currentUser || !selectedRC.myApproval || !rcRejectReason.trim() || currentRole !== 'final_approver') return;
-    const readyForFinalApproval = await isRCReadyForFinalApproval(selectedRC.id, selectedRC.allItems);
-    if (!readyForFinalApproval) {
-      addToast({
-        type: 'warning',
-        title: 'Division Review Pending',
-        message: 'Final approval is locked until every division on this RC has completed its review.',
-      });
-      return;
-    }
     try {
       const approvalUpdate = await supabase.from('rate_contract_approvals').update({
         status: 'rejected', rejection_reason: rcRejectReason, decided_at: new Date().toISOString(),
@@ -187,6 +139,7 @@ export default function FinalApproval() {
 
       const contractUpdate = await supabase.from('rate_contracts').update({
         status: 'REJECTED',
+        workflow_stage: 'final_rejected',
         updated_at: new Date().toISOString(),
       }).eq('id', selectedRC.id).select('id');
       const contractUpdateError = getMutationError(contractUpdate, 'The RC status could not be updated.');
@@ -224,6 +177,8 @@ export default function FinalApproval() {
   async function handleRCItemSave() {
     if (!editingRCItem || !selectedRC || !currentUser || currentRole !== 'final_approver') return;
     try {
+      const currentItem = selectedRC.allItems?.find(i => i.id === editingRCItem.id);
+
       const itemUpdate = await supabase.from('rate_contract_items').update({
         negotiated_price: editingRCItem.negotiated_price,
         expected_qty: editingRCItem.expected_qty,
@@ -231,6 +186,19 @@ export default function FinalApproval() {
       }).eq('id', editingRCItem.id).select('id');
       const itemUpdateError = getMutationError(itemUpdate, 'RC item changes could not be saved.');
       if (itemUpdateError) throw new Error(itemUpdateError);
+
+      await supabase.from('rate_contract_item_history').insert({
+        rc_item_id: editingRCItem.id,
+        rc_id: selectedRC.id,
+        negotiation_round: selectedRC.negotiation_round || 1,
+        actor_name: currentUser.name,
+        actor_role: 'Final Approver',
+        action_type: 'final_edit',
+        price_before: currentItem?.negotiated_price ?? null,
+        price_after: editingRCItem.negotiated_price,
+        qty_before: currentItem?.expected_qty ?? null,
+        qty_after: editingRCItem.expected_qty,
+      });
 
       const timelineInsert = await supabase.from('rate_contract_timeline').insert({
         rc_id: selectedRC.id, actor_name: currentUser.name, actor_role: 'Final Approver',
@@ -819,6 +787,9 @@ export default function FinalApproval() {
                   </div>
                   <p className="text-sm font-semibold text-ink-900">{rc.hospital?.name}</p>
                   <p className="text-[11px] text-ink-400 mt-0.5">{rc.allItems?.length ?? 0} product(s)</p>
+                  {(rc.negotiation_round || 1) >= 2 && (
+                    <p className="text-[10px] font-semibold text-indigo-600 mt-1">Round 2 · After renegotiation</p>
+                  )}
                   <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-100">
                     <span className="text-[11px] text-ink-400">{formatDate(rc.valid_from)} – {formatDate(rc.valid_to)}</span>
                     <ChevronRight size={12} className={`transition-colors ${isSel ? 'text-brand-orange' : 'text-slate-300'}`} />
@@ -840,14 +811,26 @@ export default function FinalApproval() {
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="font-mono text-xs font-bold text-ink-800">{selectedRC.rc_code}</span>
-                      <Badge className={rcStatusColor(selectedRC.status)}>{rcStatusLabel(selectedRC.status)}</Badge>
+                      <Badge className={rcWorkflowStageColor(selectedRC.workflow_stage)}>{rcWorkflowStageLabel(selectedRC.workflow_stage)}</Badge>
+                      {(selectedRC.negotiation_round || 1) >= 2 && (
+                        <span className="text-[10px] font-bold bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded">Round 2</span>
+                      )}
                     </div>
                     <p className="text-sm font-semibold text-ink-900 mt-0.5">{selectedRC.hospital?.name}</p>
                   </div>
-                  <button onClick={() => { setSelectedRC(null); setRCAllApprovals([]); }}
-                    className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-300 hover:text-ink-600 hover:bg-slate-100 transition-colors">
-                    <X size={14} />
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => navigate(`/rate-contracts/${selectedRC.id}`)}
+                      className="flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-brand-blue hover:text-brand-blue-dark hover:bg-blue-50 rounded-lg transition-colors"
+                      title="Open full RC detail page"
+                    >
+                      <ArrowUpRight size={12} /> Full RC
+                    </button>
+                    <button onClick={() => { setSelectedRC(null); setRCAllApprovals([]); }}
+                      className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-300 hover:text-ink-600 hover:bg-slate-100 transition-colors">
+                      <X size={14} />
+                    </button>
+                  </div>
                 </div>
 
                 {canActRC && (

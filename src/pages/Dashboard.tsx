@@ -30,19 +30,35 @@ export default function Dashboard() {
     setLoading(false);
   }
 
-  // RC signals
+  // RC funnel counts by workflow_stage
   const today = new Date();
-  const activeRCs       = rcs.filter(r => r.status === 'APPROVED' && new Date(r.valid_to) >= today);
+  const rcFunnel = {
+    hospital:     rcs.filter(r => r.workflow_stage === 'hospital_acceptance_pending').length,
+    divReview:    rcs.filter(r => r.workflow_stage === 'division_review' || r.workflow_stage === 'resubmitted').length,
+    sentBack:     rcs.filter(r => r.workflow_stage === 'sent_back_to_field_rep').length,
+    finalApproval: rcs.filter(r => r.workflow_stage === 'final_approval_pending').length,
+    approved:     rcs.filter(r => r.workflow_stage === 'approved').length,
+    rejected:     rcs.filter(r => r.workflow_stage === 'final_rejected' || r.workflow_stage === 'discarded').length,
+  };
+
+  // RC action alerts
+  const staleThreshold = 2 * 86400000;
+  const staleRCs = rcs.filter(r =>
+    ['division_review', 'resubmitted', 'sent_back_to_field_rep', 'final_approval_pending'].includes(r.workflow_stage) &&
+    Date.now() - new Date(r.updated_at).getTime() > staleThreshold
+  );
+  const lastLoopRCs = rcs.filter(r =>
+    (r.negotiation_round || 1) >= 2 && ['division_review', 'resubmitted'].includes(r.workflow_stage)
+  );
+  const approvedRCs = rcs.filter(r => r.workflow_stage === 'approved');
+  const approvedNoOrders = approvedRCs.filter(r => !orders.some(o => o.rc_id === r.id));
+
+  const ordersWithRC = orders.filter(o => getOrderPricingMode(o) === 'RC').length;
+  const activeRCs    = rcs.filter(r => r.workflow_stage === 'approved' && new Date(r.valid_to) >= today);
   const expiringSoonRCs = activeRCs.filter(r => {
     const days = Math.ceil((new Date(r.valid_to).getTime() - today.getTime()) / 86400000);
     return days <= 14;
   });
-  const pendingRCs = rcs.filter(r => r.status === 'PENDING');
-  const ordersWithRC = orders.filter(o => getOrderPricingMode(o) === 'RC').length;
-  const activeManualOrders = orders.filter(
-    o => getOrderPricingMode(o) === 'MANUAL' && ['final_approval_pending', 'final_approved'].includes(o.stage)
-  ).length;
-  const rcPct = orders.length > 0 ? Math.round((ordersWithRC / orders.length) * 100) : 0;
 
   // Pipeline segments
   const pendingERP    = orders.filter(o => ['pending_erp_entry', 'manager_approved'].includes(o.stage));
@@ -336,7 +352,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* ── Rate Contract signals ── */}
+      {/* ── RC Negotiation Funnel ── */}
       <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
@@ -344,8 +360,8 @@ export default function Dashboard() {
               <ScrollText size={14} className="text-indigo-600" />
             </div>
             <div>
-              <h2 className="text-sm font-semibold text-ink-900">Rate Contract Signals</h2>
-              <p className="text-[11px] text-ink-400">{activeRCs.length} active contract{activeRCs.length !== 1 ? 's' : ''}</p>
+              <h2 className="text-sm font-semibold text-ink-900">RC Negotiation Pipeline</h2>
+              <p className="text-[11px] text-ink-400">{rcs.length} contract{rcs.length !== 1 ? 's' : ''} total · {activeRCs.length} active</p>
             </div>
           </div>
           <button onClick={() => navigate('/rate-contracts')}
@@ -353,26 +369,65 @@ export default function Dashboard() {
             All RCs <ArrowRight size={11} />
           </button>
         </div>
-        <div className="grid grid-cols-4 gap-3">
-          <div className="p-3 rounded-xl bg-indigo-50 border border-indigo-100">
-            <p className="text-2xl font-bold text-indigo-700 tabular-nums">{rcPct}%</p>
-            <p className="text-xs text-indigo-500 mt-1">Orders using RC pricing</p>
-          </div>
-          <div className={`p-3 rounded-xl border ${activeManualOrders > 0 ? 'bg-orange-50 border-orange-100' : 'bg-slate-50 border-slate-100'}`}>
-            <p className={`text-2xl font-bold tabular-nums ${activeManualOrders > 0 ? 'text-brand-orange' : 'text-ink-900'}`}>
-              {activeManualOrders}
-            </p>
-            <p className="text-xs text-ink-400 mt-1">Active manual orders</p>
-          </div>
-          <div className={`p-3 rounded-xl border ${expiringSoonRCs.length > 0 ? 'bg-amber-50 border-amber-100' : 'bg-slate-50 border-slate-100'}`}>
-            <p className={`text-2xl font-bold tabular-nums ${expiringSoonRCs.length > 0 ? 'text-amber-600' : 'text-ink-900'}`}>{expiringSoonRCs.length}</p>
-            <p className="text-xs text-ink-400 mt-1">RC expiring within 14 days</p>
-          </div>
-          <div className={`p-3 rounded-xl border ${pendingRCs.length > 0 ? 'bg-orange-50 border-orange-100' : 'bg-slate-50 border-slate-100'}`}>
-            <p className={`text-2xl font-bold tabular-nums ${pendingRCs.length > 0 ? 'text-brand-orange' : 'text-ink-900'}`}>{pendingRCs.length}</p>
-            <p className="text-xs text-ink-400 mt-1">RC pending approval</p>
-          </div>
+
+        {/* Funnel stages */}
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-4">
+          {[
+            { label: 'Hospital Acceptance', count: rcFunnel.hospital,      color: 'text-slate-600',    bg: 'bg-slate-50',   border: 'border-slate-100' },
+            { label: 'Division Review',     count: rcFunnel.divReview,     color: 'text-blue-600',     bg: 'bg-blue-50',    border: 'border-blue-100' },
+            { label: 'Back With Rep',       count: rcFunnel.sentBack,      color: 'text-amber-700',    bg: 'bg-amber-50',   border: 'border-amber-100' },
+            { label: 'Final Approval',      count: rcFunnel.finalApproval, color: 'text-orange-600',   bg: 'bg-orange-50',  border: 'border-orange-100' },
+            { label: 'Approved',            count: rcFunnel.approved,      color: 'text-emerald-700',  bg: 'bg-emerald-50', border: 'border-emerald-100' },
+            { label: 'Rejected',            count: rcFunnel.rejected,      color: 'text-red-600',      bg: 'bg-red-50',     border: 'border-red-100' },
+          ].map(s => (
+            <button
+              key={s.label}
+              onClick={() => navigate('/rate-contracts')}
+              className={`p-3 rounded-xl border ${s.bg} ${s.border} text-left hover:shadow-card transition-shadow`}
+            >
+              <p className={`text-xl font-bold tabular-nums ${s.color}`}>{s.count}</p>
+              <p className="text-[10px] text-ink-400 mt-1 leading-tight">{s.label}</p>
+            </button>
+          ))}
         </div>
+
+        {/* RC Action Alerts */}
+        {(staleRCs.length > 0 || lastLoopRCs.length > 0 || approvedNoOrders.length > 0 || expiringSoonRCs.length > 0) && (
+          <div className="border-t border-slate-100 pt-3 space-y-1.5">
+            {staleRCs.length > 0 && (
+              <div className="flex items-center gap-2 text-xs">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
+                <span className="text-ink-600">
+                  <span className="font-semibold text-amber-700">{staleRCs.length}</span> RC{staleRCs.length !== 1 ? 's' : ''} stuck in same stage for 2+ days — follow up needed
+                </span>
+              </div>
+            )}
+            {lastLoopRCs.length > 0 && (
+              <div className="flex items-center gap-2 text-xs">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-400 shrink-0" />
+                <span className="text-ink-600">
+                  <span className="font-semibold text-red-600">{lastLoopRCs.length}</span> RC{lastLoopRCs.length !== 1 ? 's' : ''} in Round 2 division review — last allowed negotiation loop
+                </span>
+              </div>
+            )}
+            {approvedNoOrders.length > 0 && (
+              <div className="flex items-center gap-2 text-xs">
+                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 shrink-0" />
+                <span className="text-ink-600">
+                  <span className="font-semibold text-indigo-600">{approvedNoOrders.length}</span> approved RC{approvedNoOrders.length !== 1 ? 's' : ''} with no linked orders yet — first order not booked
+                </span>
+              </div>
+            )}
+            {expiringSoonRCs.length > 0 && (
+              <div className="flex items-center gap-2 text-xs">
+                <span className="w-1.5 h-1.5 rounded-full bg-orange-400 shrink-0" />
+                <span className="text-ink-600">
+                  <span className="font-semibold text-orange-600">{expiringSoonRCs.length}</span> active RC{expiringSoonRCs.length !== 1 ? 's' : ''} expiring within 14 days
+                </span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── Bottom: Recent orders + Alerts ── */}

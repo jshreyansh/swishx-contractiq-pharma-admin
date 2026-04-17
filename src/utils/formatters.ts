@@ -1,4 +1,4 @@
-import { OrderStage, ERPStatus, OrderPricingMode, RCStatus } from '../types';
+import { OrderStage, ERPStatus, OrderPricingMode, RCStatus, RCWorkflowStage } from '../types';
 
 export function formatINR(amount: number): string {
   return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(amount);
@@ -140,4 +140,32 @@ export function rcUtilizationColor(pct: number): string {
   if (pct >= 90) return 'bg-red-500';
   if (pct >= 70) return 'bg-amber-500';
   return 'bg-emerald-500';
+}
+
+export function rcWorkflowStageLabel(stage: RCWorkflowStage): string {
+  const map: Record<RCWorkflowStage, string> = {
+    hospital_acceptance_pending: 'Awaiting Hospital Acceptance',
+    division_review:             'Division Review',
+    sent_back_to_field_rep:      'Back With Field Rep',
+    resubmitted:                 'Resubmitted (Round 2)',
+    final_approval_pending:      'Ready for Final Approval',
+    approved:                    'Approved',
+    final_rejected:              'Final Rejected',
+    discarded:                   'Discarded',
+  };
+  return map[stage] || stage;
+}
+
+export function rcWorkflowStageColor(stage: RCWorkflowStage): string {
+  const map: Record<RCWorkflowStage, string> = {
+    hospital_acceptance_pending: 'bg-slate-100 text-slate-500',
+    division_review:             'bg-blue-50 text-blue-600',
+    sent_back_to_field_rep:      'bg-amber-50 text-amber-700',
+    resubmitted:                 'bg-indigo-50 text-indigo-600',
+    final_approval_pending:      'bg-orange-50 text-orange-600',
+    approved:                    'bg-emerald-50 text-emerald-700',
+    final_rejected:              'bg-red-50 text-red-600',
+    discarded:                   'bg-slate-100 text-slate-400',
+  };
+  return map[stage] || 'bg-slate-100 text-slate-500';
 }

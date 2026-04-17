@@ -1,15 +1,15 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, ArrowUpRight, Building2, Calendar, CheckCircle, ChevronDown,
   ChevronUp, Clock, Mail, Package, Phone, ScrollText, User, XCircle,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { RateContract, RateContractApproval, RateContractItem, RCStatus, RCTimeline } from '../types';
+import { RateContract, RateContractApproval, RateContractItem, RCItemHistory, RCStatus, RCTimeline } from '../types';
 import { loadLinkedOrdersForRateContracts } from '../utils/orderRateContracts';
 import {
   formatDate, formatDateTime, formatINR, rcStatusColor,
-  rcStatusLabel, rcUtilizationColor, timeAgo,
+  rcStatusLabel, rcUtilizationColor, rcWorkflowStageColor, rcWorkflowStageLabel, timeAgo,
 } from '../utils/formatters';
 import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
@@ -63,6 +63,22 @@ function approvalStatusBadge(status: RateContractApproval['status']): string {
   return 'bg-amber-100 text-amber-800';
 }
 
+function historyActionLabel(actionType: string): string {
+  if (actionType === 'proposed') return 'proposed';
+  if (actionType === 'division_edit') return 'edited';
+  if (actionType === 'resubmitted') return 'resubmitted';
+  if (actionType === 'final_edit') return 'adjusted (final review)';
+  return actionType;
+}
+
+function historyActionColor(actionType: string): string {
+  if (actionType === 'proposed') return 'text-slate-500';
+  if (actionType === 'division_edit') return 'text-blue-600';
+  if (actionType === 'resubmitted') return 'text-amber-600';
+  if (actionType === 'final_edit') return 'text-indigo-600';
+  return 'text-slate-400';
+}
+
 function timelineIconClass(actionType: string): string {
   if (actionType.includes('approved')) return 'bg-emerald-100';
   if (actionType.includes('rejected')) return 'bg-red-100';
@@ -84,8 +100,19 @@ export default function RateContractDetail() {
   const [approvals, setApprovals] = useState<RateContractApproval[]>([]);
   const [timeline, setTimeline] = useState<RCTimeline[]>([]);
   const [linkedOrders, setLinkedOrders] = useState<LinkedOrder[]>([]);
+  const [itemHistory, setItemHistory] = useState<Map<string, RCItemHistory[]>>(new Map());
+  const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [showTimeline, setShowTimeline] = useState(true);
+
+  function toggleItemHistory(itemId: string) {
+    setExpandedItems(prev => {
+      const next = new Set(prev);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
+  }
 
   useEffect(() => {
     if (id) loadRC();
@@ -101,14 +128,24 @@ export default function RateContractDetail() {
       { data: itemData },
       { data: approvalsData },
       { data: timelineData },
+      { data: historyData },
       linkedOrdersResult,
     ] = await Promise.all([
       supabase.from('rate_contracts').select('*, hospital:hospitals(*), field_rep:field_reps(*)').eq('id', id).single(),
       supabase.from('rate_contract_items').select('*, division:divisions(*)').eq('rc_id', id),
       supabase.from('rate_contract_approvals').select('*, division:divisions(*), approver_user:app_users(*)').eq('rc_id', id).order('sequence_order'),
       supabase.from('rate_contract_timeline').select('*').eq('rc_id', id).order('created_at', { ascending: false }),
+      supabase.from('rate_contract_item_history').select('*').eq('rc_id', id).order('created_at', { ascending: true }),
       loadLinkedOrdersForRateContracts([id]),
     ]);
+
+    const historyMap = new Map<string, RCItemHistory[]>();
+    for (const h of (historyData || []) as RCItemHistory[]) {
+      const arr = historyMap.get(h.rc_item_id) || [];
+      arr.push(h);
+      historyMap.set(h.rc_item_id, arr);
+    }
+    setItemHistory(historyMap);
 
     let linkedOrders = linkedOrdersResult.linkedOrdersByRcId.get(id) || [];
 
@@ -249,6 +286,12 @@ export default function RateContractDetail() {
             <div className="flex items-center gap-3 flex-wrap">
               <h1 className="text-xl font-bold text-slate-900 font-mono">{rc.rc_code}</h1>
               <Badge className={rcStatusColor(rc.effectiveStatus)}>{rcStatusLabel(rc.effectiveStatus)}</Badge>
+              {rc.workflow_stage && rc.workflow_stage !== 'approved' && rc.workflow_stage !== 'final_rejected' && (
+                <Badge className={rcWorkflowStageColor(rc.workflow_stage)}>{rcWorkflowStageLabel(rc.workflow_stage)}</Badge>
+              )}
+              {rc.negotiation_round > 1 && (
+                <Badge className="bg-amber-50 text-amber-700">Round {rc.negotiation_round}</Badge>
+              )}
               <Badge className="bg-indigo-50 text-indigo-700">Rate Contract</Badge>
             </div>
             <p className="text-slate-400 text-xs mt-2">
@@ -333,6 +376,9 @@ export default function RateContractDetail() {
               <Package size={14} className="text-slate-500" />
               <h2 className="text-sm font-semibold text-slate-800">Product Table</h2>
               <span className="ml-auto text-xs text-slate-400">{rc.items.length} items</span>
+              {itemHistory.size > 0 && (
+                <span className="text-[11px] text-blue-500 font-medium">· Negotiation trail available</span>
+              )}
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -345,31 +391,77 @@ export default function RateContractDetail() {
                     <th className="px-4 py-2.5 text-right text-xs font-semibold text-slate-500 uppercase tracking-wide">Price</th>
                     <th className="px-4 py-2.5 text-right text-xs font-semibold text-slate-500 uppercase tracking-wide">Used</th>
                     <th className="px-4 py-2.5 text-right text-xs font-semibold text-slate-500 uppercase tracking-wide">Remaining</th>
+                    <th className="w-8"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
                   {rc.items.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-4 py-10 text-center text-sm text-slate-400">
+                      <td colSpan={8} className="px-4 py-10 text-center text-sm text-slate-400">
                         No products configured on this rate contract.
                       </td>
                     </tr>
                   ) : rc.items.map(item => {
+                    const history = itemHistory.get(item.id) || [];
+                    const isExpanded = expandedItems.has(item.id);
+                    const hasHistory = history.length > 0;
                     const capQty = item.cap_qty ?? item.expected_qty;
                     const remainingQty = Math.max(capQty - item.used_qty, 0);
 
                     return (
-                      <tr key={item.id} className={remainingQty === 0 ? 'bg-red-50/20' : ''}>
-                        <td className="px-4 py-2.5 font-medium text-slate-800">{item.product_name}</td>
-                        <td className="px-4 py-2.5 text-slate-500 text-xs">{item.division?.name || '—'}</td>
-                        <td className="px-4 py-2.5 text-right text-slate-700">{item.expected_qty}</td>
-                        <td className="px-4 py-2.5 text-right text-slate-700">{capQty}</td>
-                        <td className="px-4 py-2.5 text-right font-semibold text-slate-800">{formatINR(item.negotiated_price)}</td>
-                        <td className="px-4 py-2.5 text-right text-slate-700">{item.used_qty}</td>
-                        <td className="px-4 py-2.5 text-right">
-                          <span className={`font-semibold ${remainingQty === 0 ? 'text-red-600' : 'text-slate-800'}`}>{remainingQty}</span>
-                        </td>
-                      </tr>
+                      <Fragment key={item.id}>
+                        <tr className={remainingQty === 0 ? 'bg-red-50/20' : ''}>
+                          <td className="px-4 py-2.5 font-medium text-slate-800">{item.product_name}</td>
+                          <td className="px-4 py-2.5 text-slate-500 text-xs">{item.division?.name || '—'}</td>
+                          <td className="px-4 py-2.5 text-right text-slate-700">{item.expected_qty}</td>
+                          <td className="px-4 py-2.5 text-right text-slate-700">{capQty}</td>
+                          <td className="px-4 py-2.5 text-right font-semibold text-slate-800">{formatINR(item.negotiated_price)}</td>
+                          <td className="px-4 py-2.5 text-right text-slate-700">{item.used_qty}</td>
+                          <td className="px-4 py-2.5 text-right">
+                            <span className={`font-semibold ${remainingQty === 0 ? 'text-red-600' : 'text-slate-800'}`}>{remainingQty}</span>
+                          </td>
+                          <td className="px-2 py-2.5 text-center">
+                            {hasHistory && (
+                              <button
+                                onClick={() => toggleItemHistory(item.id)}
+                                className="p-1 rounded hover:bg-slate-100 transition-colors"
+                                title={isExpanded ? 'Hide negotiation trail' : 'Show negotiation trail'}
+                              >
+                                {isExpanded
+                                  ? <ChevronUp size={12} className="text-blue-400" />
+                                  : <ChevronDown size={12} className="text-slate-400" />}
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                        {hasHistory && isExpanded && (
+                          <tr className="bg-blue-50/20">
+                            <td colSpan={8} className="px-5 py-3 border-t border-blue-100/50">
+                              <p className="text-[10px] font-bold text-blue-400 uppercase tracking-widest mb-2">Negotiation Trail</p>
+                              <div className="space-y-2">
+                                {history.map(h => (
+                                  <div key={h.id} className="flex items-baseline gap-2.5 text-xs">
+                                    <span className="shrink-0 text-[10px] font-bold bg-slate-200 text-slate-600 rounded px-1.5 py-0.5 tabular-nums">R{h.negotiation_round}</span>
+                                    <span className="shrink-0 font-semibold text-slate-700">{h.actor_name}</span>
+                                    <span className={`shrink-0 ${historyActionColor(h.action_type)}`}>{historyActionLabel(h.action_type)}</span>
+                                    <span className="text-slate-600 tabular-nums">
+                                      {h.action_type === 'proposed'
+                                        ? `${formatINR(h.price_after)}, qty ${h.qty_after.toLocaleString('en-IN')}`
+                                        : h.price_before !== null && h.price_before !== h.price_after
+                                          ? `${formatINR(h.price_before)} → ${formatINR(h.price_after)}${h.qty_before !== null && h.qty_before !== h.qty_after ? `, qty ${h.qty_before} → ${h.qty_after}` : ''}`
+                                          : h.qty_before !== null && h.qty_before !== h.qty_after
+                                            ? `qty ${h.qty_before} → ${h.qty_after}`
+                                            : 'no change'
+                                      }
+                                    </span>
+                                    <span className="ml-auto text-slate-300 text-[10px] shrink-0">{timeAgo(h.created_at)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
                     );
                   })}
                 </tbody>
