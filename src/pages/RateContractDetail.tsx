@@ -377,27 +377,27 @@ export default function RateContractDetail() {
               <h2 className="text-sm font-semibold text-slate-800">Product Table</h2>
               <span className="ml-auto text-xs text-slate-400">{rc.items.length} items</span>
               {itemHistory.size > 0 && (
-                <span className="text-[11px] text-blue-500 font-medium">· Negotiation trail available</span>
+                <span className="text-[11px] font-medium text-indigo-500">· {itemHistory.size} items have negotiation history</span>
               )}
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full">
                 <thead>
-                  <tr className="bg-slate-50 border-b border-slate-100">
-                    <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Product</th>
-                    <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Division</th>
-                    <th className="px-4 py-2.5 text-right text-xs font-semibold text-slate-500 uppercase tracking-wide">Expected Qty</th>
-                    <th className="px-4 py-2.5 text-right text-xs font-semibold text-slate-500 uppercase tracking-wide">Cap Qty</th>
-                    <th className="px-4 py-2.5 text-right text-xs font-semibold text-slate-500 uppercase tracking-wide">Price</th>
-                    <th className="px-4 py-2.5 text-right text-xs font-semibold text-slate-500 uppercase tracking-wide">Used</th>
-                    <th className="px-4 py-2.5 text-right text-xs font-semibold text-slate-500 uppercase tracking-wide">Remaining</th>
-                    <th className="w-8"></th>
+                  <tr className="border-b border-slate-100 bg-slate-50/80">
+                    <th className="px-4 py-3 text-left text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Product</th>
+                    <th className="px-4 py-3 text-left text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Division</th>
+                    <th className="px-4 py-3 text-right text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Exp. Qty</th>
+                    <th className="px-4 py-3 text-right text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Cap</th>
+                    <th className="px-4 py-3 text-right text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Unit Price</th>
+                    <th className="px-4 py-3 text-right text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Used</th>
+                    <th className="px-4 py-3 text-right text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Remaining</th>
+                    <th className="w-9 px-2"></th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-50">
+                <tbody>
                   {rc.items.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="px-4 py-10 text-center text-sm text-slate-400">
+                      <td colSpan={8} className="px-4 py-12 text-center text-sm text-slate-400">
                         No products configured on this rate contract.
                       </td>
                     </tr>
@@ -407,56 +407,97 @@ export default function RateContractDetail() {
                     const hasHistory = history.length > 0;
                     const capQty = item.cap_qty ?? item.expected_qty;
                     const remainingQty = Math.max(capQty - item.used_qty, 0);
+                    const maxRound = hasHistory ? Math.max(...history.map(h => h.negotiation_round)) : 1;
 
                     return (
                       <Fragment key={item.id}>
-                        <tr className={remainingQty === 0 ? 'bg-red-50/20' : ''}>
-                          <td className="px-4 py-2.5 font-medium text-slate-800">{item.product_name}</td>
-                          <td className="px-4 py-2.5 text-slate-500 text-xs">{item.division?.name || '—'}</td>
-                          <td className="px-4 py-2.5 text-right text-slate-700">{item.expected_qty}</td>
-                          <td className="px-4 py-2.5 text-right text-slate-700">{capQty}</td>
-                          <td className="px-4 py-2.5 text-right font-semibold text-slate-800">{formatINR(item.negotiated_price)}</td>
-                          <td className="px-4 py-2.5 text-right text-slate-700">{item.used_qty}</td>
-                          <td className="px-4 py-2.5 text-right">
-                            <span className={`font-semibold ${remainingQty === 0 ? 'text-red-600' : 'text-slate-800'}`}>{remainingQty}</span>
+                        <tr
+                          className={`border-b border-slate-100 transition-colors ${
+                            isExpanded ? 'bg-indigo-50/30' : remainingQty === 0 ? 'bg-red-50/30 hover:bg-red-50/50' : 'hover:bg-slate-50/70'
+                          }`}
+                        >
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-semibold text-slate-800">{item.product_name}</span>
+                              {hasHistory && maxRound >= 2 && (
+                                <span className="text-[10px] font-bold bg-amber-100 text-amber-700 rounded px-1.5 py-0.5">R{maxRound}</span>
+                              )}
+                            </div>
                           </td>
-                          <td className="px-2 py-2.5 text-center">
-                            {hasHistory && (
+                          <td className="px-4 py-3">
+                            <span className="text-sm text-slate-500">{item.division?.name || '—'}</span>
+                          </td>
+                          <td className="px-4 py-3 text-right text-sm text-slate-700 tabular-nums">{item.expected_qty.toLocaleString('en-IN')}</td>
+                          <td className="px-4 py-3 text-right text-sm text-slate-500 tabular-nums">{capQty.toLocaleString('en-IN')}</td>
+                          <td className="px-4 py-3 text-right text-sm font-semibold text-slate-800 tabular-nums">{formatINR(item.negotiated_price)}</td>
+                          <td className="px-4 py-3 text-right text-sm text-slate-600 tabular-nums">{item.used_qty.toLocaleString('en-IN')}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">
+                            <span className={`text-sm font-semibold ${remainingQty === 0 ? 'text-red-600' : remainingQty < capQty * 0.1 ? 'text-amber-600' : 'text-emerald-700'}`}>
+                              {remainingQty.toLocaleString('en-IN')}
+                            </span>
+                          </td>
+                          <td className="px-2 py-3 text-center">
+                            {hasHistory ? (
                               <button
                                 onClick={() => toggleItemHistory(item.id)}
-                                className="p-1 rounded hover:bg-slate-100 transition-colors"
+                                className={`w-6 h-6 flex items-center justify-center rounded-md transition-colors ${
+                                  isExpanded ? 'bg-indigo-100 text-indigo-600' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600'
+                                }`}
                                 title={isExpanded ? 'Hide negotiation trail' : 'Show negotiation trail'}
                               >
-                                {isExpanded
-                                  ? <ChevronUp size={12} className="text-blue-400" />
-                                  : <ChevronDown size={12} className="text-slate-400" />}
+                                {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                               </button>
+                            ) : (
+                              <span className="w-6 h-6 block" />
                             )}
                           </td>
                         </tr>
+
                         {hasHistory && isExpanded && (
-                          <tr className="bg-blue-50/20">
-                            <td colSpan={8} className="px-5 py-3 border-t border-blue-100/50">
-                              <p className="text-[10px] font-bold text-blue-400 uppercase tracking-widest mb-2">Negotiation Trail</p>
-                              <div className="space-y-2">
-                                {history.map(h => (
-                                  <div key={h.id} className="flex items-baseline gap-2.5 text-xs">
-                                    <span className="shrink-0 text-[10px] font-bold bg-slate-200 text-slate-600 rounded px-1.5 py-0.5 tabular-nums">R{h.negotiation_round}</span>
-                                    <span className="shrink-0 font-semibold text-slate-700">{h.actor_name}</span>
-                                    <span className={`shrink-0 ${historyActionColor(h.action_type)}`}>{historyActionLabel(h.action_type)}</span>
-                                    <span className="text-slate-600 tabular-nums">
-                                      {h.action_type === 'proposed'
-                                        ? `${formatINR(h.price_after)}, qty ${h.qty_after.toLocaleString('en-IN')}`
-                                        : h.price_before !== null && h.price_before !== h.price_after
-                                          ? `${formatINR(h.price_before)} → ${formatINR(h.price_after)}${h.qty_before !== null && h.qty_before !== h.qty_after ? `, qty ${h.qty_before} → ${h.qty_after}` : ''}`
-                                          : h.qty_before !== null && h.qty_before !== h.qty_after
-                                            ? `qty ${h.qty_before} → ${h.qty_after}`
-                                            : 'no change'
-                                      }
-                                    </span>
-                                    <span className="ml-auto text-slate-300 text-[10px] shrink-0">{timeAgo(h.created_at)}</span>
-                                  </div>
-                                ))}
+                          <tr className="border-b border-indigo-100/60 bg-indigo-50/20">
+                            <td colSpan={8} className="px-6 pt-3 pb-4">
+                              <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-3">Negotiation Trail — {item.product_name}</p>
+                              <div className="relative pl-4">
+                                {/* Vertical connector line */}
+                                {history.length > 1 && (
+                                  <div className="absolute left-[7px] top-3 bottom-3 w-px bg-slate-200" />
+                                )}
+                                <div className="space-y-3">
+                                  {history.map((h, idx) => {
+                                    const isLast = idx === history.length - 1;
+                                    const dotColor = h.action_type === 'proposed' ? 'bg-slate-400'
+                                      : h.action_type === 'division_edit' ? 'bg-blue-500'
+                                      : h.action_type === 'resubmitted' ? 'bg-amber-500'
+                                      : 'bg-indigo-500';
+                                    const priceText = h.action_type === 'proposed'
+                                      ? `${formatINR(h.price_after)}, qty ${h.qty_after.toLocaleString('en-IN')}`
+                                      : h.price_before !== null && h.price_before !== h.price_after
+                                        ? `${formatINR(h.price_before)} → ${formatINR(h.price_after)}${h.qty_before !== null && h.qty_before !== h.qty_after ? ` · qty ${h.qty_before} → ${h.qty_after}` : ''}`
+                                        : h.qty_before !== null && h.qty_before !== h.qty_after
+                                          ? `qty ${h.qty_before} → ${h.qty_after}`
+                                          : 'confirmed, no change';
+
+                                    return (
+                                      <div key={h.id} className="flex items-start gap-3 relative">
+                                        {/* Dot */}
+                                        <div className={`shrink-0 w-3.5 h-3.5 rounded-full border-2 border-white shadow-sm mt-0.5 ${dotColor}`} />
+                                        {/* Content */}
+                                        <div className="flex-1 min-w-0">
+                                          <div className="flex items-baseline gap-2 flex-wrap">
+                                            <span className={`text-[10px] font-bold rounded px-1 py-0.5 ${h.negotiation_round >= 2 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'}`}>R{h.negotiation_round}</span>
+                                            <span className="text-xs font-semibold text-slate-700">{h.actor_name}</span>
+                                            <span className={`text-xs ${historyActionColor(h.action_type)}`}>{historyActionLabel(h.action_type)}</span>
+                                            <span className="text-xs text-slate-600 tabular-nums font-medium">{priceText}</span>
+                                            {isLast && h.action_type !== 'proposed' && (
+                                              <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-50 rounded px-1.5 py-0.5">Current</span>
+                                            )}
+                                          </div>
+                                          <p className="text-[11px] text-slate-400 mt-0.5">{timeAgo(h.created_at)}</p>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
                               </div>
                             </td>
                           </tr>
