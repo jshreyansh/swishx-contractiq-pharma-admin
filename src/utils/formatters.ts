@@ -97,8 +97,12 @@ export function erpStatusColor(status: ERPStatus): string {
   return map[status] || 'bg-slate-100 text-slate-500';
 }
 
-export function getOrderPricingMode(order: { pricing_mode?: OrderPricingMode | null; rc_id?: string | null }): OrderPricingMode {
-  if (order.pricing_mode === 'RC' || order.rc_id) return 'RC';
+export function getOrderPricingMode(order: {
+  pricing_mode?: OrderPricingMode | null;
+  rc_id?: string | null;
+  linked_rate_contracts?: Array<{ id: string }> | null;
+}): OrderPricingMode {
+  if (order.pricing_mode === 'RC' || (order.linked_rate_contracts?.length || 0) > 0 || order.rc_id) return 'RC';
   return 'MANUAL';
 }
 

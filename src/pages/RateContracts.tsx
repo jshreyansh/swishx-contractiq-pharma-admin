@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Search, X, ArrowUpRight, PackageSearch, AlertTriangle } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { RateContract, RateContractItem, RCStatus } from '../types';
+import { loadLinkedOrdersForRateContracts } from '../utils/orderRateContracts';
 import { formatINR, formatDate, rcStatusLabel, rcStatusColor } from '../utils/formatters';
 import { formatSupabaseError, isMissingRateContractsSchema, RATE_CONTRACTS_SCHEMA_WARNING } from '../utils/supabaseSchema';
 import Card from '../components/ui/Card';
@@ -78,12 +79,12 @@ export default function RateContracts() {
         throw rcResponse.error;
       }
 
-      const [{ data: itemData, error: itemError }, { data: orderData, error: orderError }] = await Promise.all([
+      const [{ data: itemData, error: itemError }, linkedOrders] = await Promise.all([
         supabase.from('rate_contract_items').select('*, division:divisions(*)'),
-        supabase.from('orders').select('id, rc_id, total_value').not('rc_id', 'is', null),
+        loadLinkedOrdersForRateContracts((rcResponse.data || []).map(rc => rc.id)),
       ]);
 
-      if ((itemError && isMissingRateContractsSchema(itemError)) || (orderError && isMissingRateContractsSchema(orderError))) {
+      if (itemError && isMissingRateContractsSchema(itemError)) {
         setRCs([]);
         setSchemaUnavailable(true);
         return;
@@ -93,13 +94,19 @@ export default function RateContracts() {
         throw itemError;
       }
 
-      if (orderError) {
-        throw orderError;
+      if (linkedOrders.error) {
+        if (isMissingRateContractsSchema(linkedOrders.error)) {
+          setRCs([]);
+          setSchemaUnavailable(true);
+          return;
+        }
+
+        throw linkedOrders.error;
       }
 
       const enriched: RCWithStats[] = (rcResponse.data || []).map(rc => {
         const items = (itemData || []).filter(i => i.rc_id === rc.id) as RateContractItem[];
-        const ordersCount = (orderData || []).filter(o => o.rc_id === rc.id).length;
+        const ordersCount = (linkedOrders.linkedOrdersByRcId.get(rc.id) || []).length;
         return computeStats(rc as RateContract, items, ordersCount);
       });
 

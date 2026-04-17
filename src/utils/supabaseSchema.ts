@@ -22,6 +22,16 @@ export function isMissingRateContractsSchema(error: SupabaseErrorLike | null | u
   );
 }
 
+export function isMissingOrderRateContractLinksSchema(error: SupabaseErrorLike | null | undefined): boolean {
+  const text = errorText(error);
+
+  return (
+    (error?.code === 'PGRST205' && text.includes('order_rate_contract_links')) ||
+    (error?.code === '42p01' && text.includes('order_rate_contract_links')) ||
+    (error?.code === '42703' && text.includes('order_rate_contract_links'))
+  );
+}
+
 export function formatSupabaseError(error: SupabaseErrorLike | null | undefined, fallback: string): string {
   return error?.message || fallback;
 }

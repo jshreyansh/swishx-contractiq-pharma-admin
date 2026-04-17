@@ -97,6 +97,7 @@ export interface Order {
   stockist?: Stockist;
   cfa_user?: AppUser;
   rc?: RateContract;
+  linked_rate_contracts?: RateContract[];
   order_items?: OrderItem[];
   division_approvals?: DivisionApproval[];
   final_approvals?: FinalApproval[];
@@ -255,4 +256,14 @@ export interface RCTimeline {
   action: string;
   action_type: string;
   created_at: string;
+}
+
+export interface OrderRateContractLink {
+  id: string;
+  order_id: string;
+  rc_id: string;
+  linked_at: string | null;
+  created_at: string;
+  rate_contract?: RateContract;
+  order?: Order;
 }

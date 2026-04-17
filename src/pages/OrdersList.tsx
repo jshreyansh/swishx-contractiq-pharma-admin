@@ -4,7 +4,8 @@ import { Search, Filter, X, ArrowUpRight, AlertTriangle, PackageSearch } from 'l
 import { supabase } from '../lib/supabase';
 import { Order, OrderStage } from '../types';
 import { formatINR, formatDateTime, getOrderPricingMode, orderPricingColor, orderPricingLabel, stageLabel, stageColor, erpStatusLabel, erpStatusColor } from '../utils/formatters';
-import { formatSupabaseError, isMissingRateContractsSchema, RATE_CONTRACTS_SCHEMA_WARNING } from '../utils/supabaseSchema';
+import { enrichOrdersWithLinkedRateContracts, hasRateContractSchemaError } from '../utils/orderRateContracts';
+import { formatSupabaseError, RATE_CONTRACTS_SCHEMA_WARNING } from '../utils/supabaseSchema';
 import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
 import PageHeader from '../components/ui/PageHeader';
@@ -40,31 +41,30 @@ export default function OrdersList() {
     setRcSchemaUnavailable(false);
 
     try {
-      const primary = await supabase
+      const orderResponse = await supabase
         .from('orders')
-        .select('*, hospital:hospitals(*), field_rep:field_reps(*), stockist:stockists(*), cfa_user:app_users!orders_cfa_user_id_fkey(*), rc:rate_contracts(rc_code)')
+        .select('*, hospital:hospitals(*), field_rep:field_reps(*), stockist:stockists(*), cfa_user:app_users!orders_cfa_user_id_fkey(*)')
         .order('updated_at', { ascending: false });
 
-      if (primary.error && isMissingRateContractsSchema(primary.error)) {
-        const fallback = await supabase
-          .from('orders')
-          .select('*, hospital:hospitals(*), field_rep:field_reps(*), stockist:stockists(*), cfa_user:app_users!orders_cfa_user_id_fkey(*)')
-          .order('updated_at', { ascending: false });
+      if (orderResponse.error) {
+        throw orderResponse.error;
+      }
 
-        if (fallback.error) {
-          throw fallback.error;
+      const orderData = (orderResponse.data || []) as Order[];
+      const linkedRateContracts = await enrichOrdersWithLinkedRateContracts(orderData);
+
+      if (linkedRateContracts.error) {
+        if (hasRateContractSchemaError(linkedRateContracts.error)) {
+          setOrders(orderData);
+          setRcSchemaUnavailable(true);
+          return;
         }
 
-        setOrders((fallback.data || []) as Order[]);
-        setRcSchemaUnavailable(true);
-        return;
+        throw linkedRateContracts.error;
       }
 
-      if (primary.error) {
-        throw primary.error;
-      }
-
-      setOrders((primary.data || []) as Order[]);
+      setOrders(linkedRateContracts.orders);
+      setRcSchemaUnavailable(false);
     } catch (error) {
       setOrders([]);
       setLoadError(formatSupabaseError(error as { message?: string | null }, 'Orders could not be loaded.'));
@@ -80,7 +80,8 @@ export default function OrdersList() {
       o.hospital?.name.toLowerCase().includes(q) ||
       o.field_rep?.name.toLowerCase().includes(q) ||
       o.stockist?.name.toLowerCase().includes(q) ||
-      o.cfa_user?.name.toLowerCase().includes(q);
+      o.cfa_user?.name.toLowerCase().includes(q) ||
+      o.linked_rate_contracts?.some(rc => rc.rc_code.toLowerCase().includes(q));
     const matchStage = !stageFilter || o.stage === stageFilter;
     return matchSearch && matchStage;
   });
@@ -104,7 +105,7 @@ export default function OrdersList() {
           <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-600" />
           <div>
             <p className="text-sm font-semibold text-amber-800">Rate contract addendum is not applied in this database</p>
-            <p className="text-xs text-amber-700 mt-1">{RATE_CONTRACTS_SCHEMA_WARNING} Orders are shown with the pre-RC query for now.</p>
+            <p className="text-xs text-amber-700 mt-1">{RATE_CONTRACTS_SCHEMA_WARNING} Orders are still visible, but RC-linked context is unavailable for now.</p>
           </div>
         </div>
       )}
@@ -217,6 +218,7 @@ export default function OrdersList() {
               <tbody className="divide-y divide-slate-100">
                 {filtered.map(order => {
                   const pricingMode = getOrderPricingMode(order);
+                  const linkedRateContracts = order.linked_rate_contracts || [];
 
                   return (
                   <tr
@@ -257,10 +259,22 @@ export default function OrdersList() {
                     <td className="px-4 py-3 whitespace-nowrap">
                       {rcSchemaUnavailable ? (
                         <span className="text-xs text-amber-600">Unavailable</span>
-                      ) : order.rc?.rc_code ? (
-                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-md font-mono">
-                          {order.rc.rc_code}
-                        </span>
+                      ) : linkedRateContracts.length > 0 ? (
+                        <div className="flex max-w-[220px] flex-wrap gap-1">
+                          {linkedRateContracts.slice(0, 2).map(rateContract => (
+                            <span
+                              key={rateContract.id}
+                              className="inline-flex items-center gap-1 rounded-md bg-indigo-50 px-2 py-0.5 font-mono text-[11px] font-semibold text-indigo-700"
+                            >
+                              {rateContract.rc_code}
+                            </span>
+                          ))}
+                          {linkedRateContracts.length > 2 && (
+                            <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500">
+                              +{linkedRateContracts.length - 2} more
+                            </span>
+                          )}
+                        </div>
                       ) : (
                         <span className="text-xs text-ink-300">—</span>
                       )}

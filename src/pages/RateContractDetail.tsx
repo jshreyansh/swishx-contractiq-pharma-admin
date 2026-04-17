@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { RateContract, RateContractApproval, RateContractItem, RCStatus, RCTimeline } from '../types';
+import { loadLinkedOrdersForRateContracts } from '../utils/orderRateContracts';
 import {
   formatDate, formatDateTime, formatINR, rcStatusColor,
   rcStatusLabel, rcUtilizationColor, timeAgo,
@@ -27,6 +28,7 @@ interface LinkedOrder {
   id: string;
   order_id: string;
   total_value: number;
+  linked_rc_count?: number;
 }
 
 function effectiveStatus(rc: RateContract): RCStatus {
@@ -97,22 +99,41 @@ export default function RateContractDetail() {
     const [
       { data: rcData },
       { data: itemData },
-      { data: orderData },
       { data: approvalsData },
       { data: timelineData },
-      { data: linkedOrdersData },
+      linkedOrdersResult,
     ] = await Promise.all([
       supabase.from('rate_contracts').select('*, hospital:hospitals(*), field_rep:field_reps(*)').eq('id', id).single(),
       supabase.from('rate_contract_items').select('*, division:divisions(*)').eq('rc_id', id),
-      supabase.from('orders').select('id, rc_id, total_value').eq('rc_id', id),
       supabase.from('rate_contract_approvals').select('*, division:divisions(*), approver_user:app_users(*)').eq('rc_id', id).order('sequence_order'),
       supabase.from('rate_contract_timeline').select('*').eq('rc_id', id).order('created_at', { ascending: false }),
-      supabase.from('orders').select('id, order_id, total_value').eq('rc_id', id).order('updated_at', { ascending: false }),
+      loadLinkedOrdersForRateContracts([id]),
     ]);
+
+    let linkedOrders = linkedOrdersResult.linkedOrdersByRcId.get(id) || [];
+
+    if (linkedOrders.length > 0 && !linkedOrdersResult.schemaUnavailable) {
+      const { data: orderLinks } = await supabase
+        .from('order_rate_contract_links')
+        .select('order_id, rc_id')
+        .in('order_id', linkedOrders.map(order => order.id));
+
+      if (orderLinks) {
+        const rcCountByOrderId = new Map<string, number>();
+        for (const link of orderLinks) {
+          rcCountByOrderId.set(link.order_id, (rcCountByOrderId.get(link.order_id) || 0) + 1);
+        }
+
+        linkedOrders = linkedOrders.map(order => ({
+          ...order,
+          linked_rc_count: rcCountByOrderId.get(order.id) || 1,
+        }));
+      }
+    }
 
     if (rcData) {
       const items = (itemData || []) as RateContractItem[];
-      const ordersCount = (orderData || []).length;
+      const ordersCount = linkedOrders.length;
       setRC(computeStats(rcData as RateContract, items, ordersCount));
     } else {
       setRC(null);
@@ -120,7 +141,7 @@ export default function RateContractDetail() {
 
     setApprovals((approvalsData || []) as RateContractApproval[]);
     setTimeline((timelineData || []) as RCTimeline[]);
-    setLinkedOrders((linkedOrdersData || []) as LinkedOrder[]);
+    setLinkedOrders(linkedOrders as LinkedOrder[]);
     setLoading(false);
   }
 
@@ -399,7 +420,12 @@ export default function RateContractDetail() {
                   onClick={() => navigate(`/orders/${order.id}`)}
                   className="w-full flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-slate-50/50 hover:bg-slate-100 transition-colors text-left group"
                 >
-                  <span className="font-mono text-sm font-semibold text-slate-800">{order.order_id}</span>
+                  <div className="min-w-0">
+                    <span className="font-mono text-sm font-semibold text-slate-800">{order.order_id}</span>
+                    {order.linked_rc_count && order.linked_rc_count > 1 && (
+                      <p className="mt-0.5 text-xs text-indigo-600">Part of {order.linked_rc_count} linked RCs</p>
+                    )}
+                  </div>
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-slate-700">{formatINR(order.total_value)}</span>
                     <ArrowUpRight size={12} className="text-slate-300 group-hover:text-brand-orange transition-colors" />

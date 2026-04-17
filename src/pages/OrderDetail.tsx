@@ -6,8 +6,9 @@ import {
   ScrollText, ArrowUpRight,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { Order, OrderItem, DivisionApproval, FinalApproval, OrderTimeline, RateContract } from '../types';
+import { Order, OrderItem, DivisionApproval, FinalApproval, OrderTimeline } from '../types';
 import { formatINR, formatDate, formatDateTime, getOrderPricingMode, orderPricingColor, orderPricingLabel, stageLabel, stageColor, erpStatusLabel, erpStatusColor, timeAgo, rcStatusColor } from '../utils/formatters';
+import { enrichOrdersWithLinkedRateContracts, hasRateContractSchemaError } from '../utils/orderRateContracts';
 import { ensureDivisionApprovalsForOrder, syncOrderStageAfterDivisionDecision } from '../utils/orderWorkflow';
 import { getMutationError } from '../utils/supabaseWrites';
 import { useApp } from '../context/AppContext';
@@ -20,12 +21,12 @@ export default function OrderDetail() {
   const navigate = useNavigate();
   const { currentRole, currentUser, addToast } = useApp();
   const [order, setOrder] = useState<Order | null>(null);
-  const [rc, setRC] = useState<RateContract | null>(null);
   const [items, setItems] = useState<OrderItem[]>([]);
   const [divApprovals, setDivApprovals] = useState<DivisionApproval[]>([]);
   const [finalApprovals, setFinalApprovals] = useState<FinalApproval[]>([]);
   const [timeline, setTimeline] = useState<OrderTimeline[]>([]);
   const [loading, setLoading] = useState(true);
+  const [rcLinkUnavailable, setRcLinkUnavailable] = useState(false);
   const [showTimeline, setShowTimeline] = useState(true);
   const [rejectModal, setRejectModal] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
@@ -35,7 +36,7 @@ export default function OrderDetail() {
 
   async function loadOrder() {
     setLoading(true);
-    setRC(null);
+    setRcLinkUnavailable(false);
     const [{ data: o }, { data: oi }, { data: da }, { data: fa }, { data: tl }] = await Promise.all([
       supabase.from('orders').select('*, hospital:hospitals(*), field_rep:field_reps(*), stockist:stockists(*), cfa_user:app_users!orders_cfa_user_id_fkey(*)').eq('id', id!).maybeSingle(),
       supabase.from('order_items').select('*, division:divisions(*)').eq('order_id', id!).order('product_name'),
@@ -44,15 +45,11 @@ export default function OrderDetail() {
       supabase.from('order_timeline').select('*').eq('order_id', id!).order('created_at', { ascending: false }),
     ]);
     if (o) {
-      setOrder(o as Order);
-      if ((o as Order).rc_id) {
-        const { data: rcData } = await supabase
-          .from('rate_contracts')
-          .select('*, hospital:hospitals(*)')
-          .eq('id', (o as Order).rc_id)
-          .maybeSingle();
-        if (rcData) setRC(rcData as RateContract);
+      const linkedRateContracts = await enrichOrdersWithLinkedRateContracts([o as Order]);
+      if (linkedRateContracts.error && hasRateContractSchemaError(linkedRateContracts.error)) {
+        setRcLinkUnavailable(true);
       }
+      setOrder((linkedRateContracts.orders[0] || o) as Order);
     }
     if (oi) setItems(oi as OrderItem[]);
     if (da) setDivApprovals(da as DivisionApproval[]);
@@ -350,6 +347,7 @@ export default function OrderDetail() {
   const totalValue = items.filter(i => i.status !== 'rejected' && i.status !== 'removed')
     .reduce((sum, i) => sum + ((i.final_quantity ?? i.quantity) * (i.final_price ?? i.unit_price)), 0);
   const pricingMode = getOrderPricingMode(order);
+  const linkedRateContracts = order.linked_rate_contracts || [];
   const fieldRepName = order.field_rep?.name?.trim() || 'Unavailable';
   const fieldRepEmail = order.field_rep?.email?.trim() || 'Unavailable';
   const fieldRepPhone = order.field_rep?.phone?.trim() || 'Unavailable';
@@ -432,26 +430,53 @@ export default function OrderDetail() {
       </Card>
 
       {/* RC context block */}
-      {rc ? (
-        <div className="flex items-center gap-4 px-4 py-3 bg-indigo-50 border border-indigo-100 rounded-2xl">
-          <div className="w-8 h-8 bg-indigo-100 rounded-xl flex items-center justify-center shrink-0">
-            <ScrollText size={15} className="text-indigo-600" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="font-mono text-xs font-bold text-indigo-800">{rc.rc_code}</span>
-              <Badge className={rcStatusColor(rc.status)}>{rc.status === 'APPROVED' ? 'Active' : rc.status}</Badge>
+      {linkedRateContracts.length > 0 ? (
+        <div className="rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-3">
+          <div className="flex items-center gap-3">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-indigo-100">
+              <ScrollText size={15} className="text-indigo-600" />
             </div>
-            <p className="text-xs text-indigo-600 mt-0.5">
-              Validity: {formatDate(rc.valid_from)} – {formatDate(rc.valid_to)} · This order follows the approved hospital rate contract
-            </p>
+            <div className="min-w-0 flex-1">
+              <div className="text-xs font-bold uppercase tracking-wide text-indigo-700">Linked Rate Contracts</div>
+              <p className="mt-0.5 text-xs text-indigo-600">
+                This order combines locked RC pricing from {linkedRateContracts.length} approved hospital rate contract{linkedRateContracts.length !== 1 ? 's' : ''}.
+              </p>
+            </div>
           </div>
-          <button
-            onClick={() => navigate(`/rate-contracts/${rc.id}`)}
-            className="text-xs text-indigo-600 font-semibold flex items-center gap-1 hover:text-indigo-800 transition-colors shrink-0"
-          >
-            View RC <ArrowUpRight size={11} />
-          </button>
+
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            {linkedRateContracts.map(rateContract => (
+              <div
+                key={rateContract.id}
+                className="flex items-center justify-between gap-3 rounded-xl border border-indigo-100 bg-white/75 px-3 py-2.5"
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-xs font-bold text-indigo-800">{rateContract.rc_code}</span>
+                    <Badge className={rcStatusColor(rateContract.status)}>
+                      {rateContract.status === 'APPROVED' ? 'Active' : rateContract.status}
+                    </Badge>
+                  </div>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    Validity: {formatDate(rateContract.valid_from)} – {formatDate(rateContract.valid_to)}
+                  </p>
+                </div>
+                <button
+                  onClick={() => navigate(`/rate-contracts/${rateContract.id}`)}
+                  className="shrink-0 text-xs font-semibold text-indigo-600 transition-colors hover:text-indigo-800"
+                >
+                  <span className="inline-flex items-center gap-1">
+                    View RC <ArrowUpRight size={11} />
+                  </span>
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : pricingMode === 'RC' && rcLinkUnavailable ? (
+        <div className="flex items-center gap-3 px-4 py-2.5 bg-amber-50 border border-amber-100 rounded-2xl">
+          <ScrollText size={13} className="text-amber-500 shrink-0" />
+          <p className="text-xs text-amber-700">This RC order is present, but the linked rate contract records are not available in this environment.</p>
         </div>
       ) : (
         <div className="flex items-center gap-3 px-4 py-2.5 bg-slate-50 border border-slate-100 rounded-2xl">
