@@ -28,12 +28,12 @@
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: #C4C9CB transparent;
+  scrollbar-color: #D1D5DB transparent;
 }
 
 *::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 4px;
+  height: 4px;
 }
 
 *::-webkit-scrollbar-track {
@@ -41,6 +41,18 @@
 }
 
 *::-webkit-scrollbar-thumb {
-  background-color: #C4C9CB;
+  background-color: #D1D5DB;
   border-radius: 10px;
+}
+
+/* Table hover rows */
+tbody tr {
+  transition: background-color 0.12s ease;
+}
+
+/* Focus ring on interactive elements */
+button:focus-visible, a:focus-visible {
+  outline: 2px solid #FD4B1B;
+  outline-offset: 2px;
+  border-radius: 6px;
 }

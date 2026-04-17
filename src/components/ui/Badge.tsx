@@ -20,7 +20,7 @@ interface BadgeProps {
 export default function Badge({ className = '', variant, children, dot }: BadgeProps) {
   const variantClass = variant ? variantClasses[variant] : '';
   return (
-    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium ${variantClass} ${className}`}>
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold whitespace-nowrap ${variantClass} ${className}`}>
       {dot && <span className="w-1.5 h-1.5 rounded-full bg-current opacity-70 flex-shrink-0" />}
       {children}
     </span>

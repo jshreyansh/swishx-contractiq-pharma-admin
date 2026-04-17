@@ -3,7 +3,8 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, Filter, X, ArrowUpRight, AlertTriangle, PackageSearch } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { Order, OrderStage } from '../types';
-import { formatINR, formatDateTime, stageLabel, stageColor, erpStatusLabel, erpStatusColor } from '../utils/formatters';
+import { formatINR, formatDateTime, getOrderPricingMode, orderPricingColor, orderPricingLabel, stageLabel, stageColor, erpStatusLabel, erpStatusColor } from '../utils/formatters';
+import { formatSupabaseError, isMissingRateContractsSchema, RATE_CONTRACTS_SCHEMA_WARNING } from '../utils/supabaseSchema';
 import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
 import PageHeader from '../components/ui/PageHeader';
@@ -26,6 +27,8 @@ export default function OrdersList() {
   const [search, setSearch] = useState('');
   const [stageFilter, setStageFilter] = useState(searchParams.get('stage') || '');
   const [showFilters, setShowFilters] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [rcSchemaUnavailable, setRcSchemaUnavailable] = useState(false);
 
   useEffect(() => {
     loadOrders();
@@ -33,12 +36,41 @@ export default function OrdersList() {
 
   const loadOrders = useCallback(async () => {
     setLoading(true);
-    const { data } = await supabase
-      .from('orders')
-      .select('*, hospital:hospitals(*), field_rep:field_reps(*), stockist:stockists(*), cfa_user:app_users!orders_cfa_user_id_fkey(*)')
-      .order('updated_at', { ascending: false });
-    if (data) setOrders(data as Order[]);
-    setLoading(false);
+    setLoadError(null);
+    setRcSchemaUnavailable(false);
+
+    try {
+      const primary = await supabase
+        .from('orders')
+        .select('*, hospital:hospitals(*), field_rep:field_reps(*), stockist:stockists(*), cfa_user:app_users!orders_cfa_user_id_fkey(*), rc:rate_contracts(rc_code)')
+        .order('updated_at', { ascending: false });
+
+      if (primary.error && isMissingRateContractsSchema(primary.error)) {
+        const fallback = await supabase
+          .from('orders')
+          .select('*, hospital:hospitals(*), field_rep:field_reps(*), stockist:stockists(*), cfa_user:app_users!orders_cfa_user_id_fkey(*)')
+          .order('updated_at', { ascending: false });
+
+        if (fallback.error) {
+          throw fallback.error;
+        }
+
+        setOrders((fallback.data || []) as Order[]);
+        setRcSchemaUnavailable(true);
+        return;
+      }
+
+      if (primary.error) {
+        throw primary.error;
+      }
+
+      setOrders((primary.data || []) as Order[]);
+    } catch (error) {
+      setOrders([]);
+      setLoadError(formatSupabaseError(error as { message?: string | null }, 'Orders could not be loaded.'));
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   const filtered = orders.filter(o => {
@@ -67,51 +99,62 @@ export default function OrdersList() {
         ) : undefined}
       />
 
-      <Card className="p-4">
-        <div className="flex gap-3 items-center">
+      {rcSchemaUnavailable && (
+        <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-600" />
+          <div>
+            <p className="text-sm font-semibold text-amber-800">Rate contract addendum is not applied in this database</p>
+            <p className="text-xs text-amber-700 mt-1">{RATE_CONTRACTS_SCHEMA_WARNING} Orders are shown with the pre-RC query for now.</p>
+          </div>
+        </div>
+      )}
+
+      <Card>
+        {/* Search & filter bar */}
+        <div className="p-3 border-b border-slate-100 flex gap-2.5 items-center">
           <div className="flex-1 relative">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-500" />
+            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" />
             <input
               type="text"
-              placeholder="Search by Order ID, Hospital, Rep, Stockist, CFA..."
+              placeholder="Search by Order ID, Hospital, Rep, Stockist…"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 text-sm border border-app-surface-dark rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-orange/20 focus:border-brand-orange/40 transition-colors bg-white text-ink-900 placeholder:text-ink-500"
+              className="w-full pl-8 pr-4 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-orange/20 focus:border-brand-orange/50 transition-all bg-white text-ink-900 placeholder:text-ink-400"
             />
           </div>
           <button
             onClick={() => setShowFilters(!showFilters)}
-            className={`flex items-center gap-1.5 px-3 py-2 text-sm border rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-orange/30 ${
+            className={`flex items-center gap-1.5 px-3 py-2 text-sm border rounded-lg transition-all whitespace-nowrap ${
               showFilters || stageFilter
-                ? 'bg-primary-50 border-primary-300 text-brand-orange'
-                : 'border-app-surface-dark text-ink-700 hover:bg-app-bg'
+                ? 'bg-primary-50 border-primary-200 text-brand-orange'
+                : 'border-slate-200 text-ink-600 hover:bg-slate-50'
             }`}
           >
-            <Filter size={14} />
-            Filters
-            {stageFilter && <span className="ml-0.5 w-2 h-2 bg-brand-orange rounded-full" />}
+            <Filter size={13} />
+            Filter
+            {stageFilter && <span className="w-1.5 h-1.5 bg-brand-orange rounded-full" />}
           </button>
           {activeFilters > 0 && (
             <button
               onClick={() => { setSearch(''); setStageFilter(''); setSearchParams({}); }}
-              className="flex items-center gap-1 text-xs text-ink-500 hover:text-ink-900 px-2 py-2 rounded-lg hover:bg-app-bg transition-colors"
+              className="flex items-center gap-1 text-xs text-ink-400 hover:text-ink-700 px-2 py-2 rounded-lg hover:bg-slate-100 transition-colors whitespace-nowrap"
             >
-              <X size={12} /> Clear all
+              <X size={12} /> Clear
             </button>
           )}
         </div>
 
         {showFilters && (
-          <div className="mt-3 pt-3 border-t border-app-surface-dark flex gap-4 flex-wrap">
+          <div className="px-4 py-3 border-b border-slate-100 flex gap-4 flex-wrap bg-slate-50/50">
             <div>
-              <label htmlFor="stage-filter" className="text-xs font-medium text-ink-500 block mb-1.5">
+              <label htmlFor="stage-filter" className="text-[11px] font-semibold text-ink-500 block mb-1 uppercase tracking-wide">
                 Stage
               </label>
               <select
                 id="stage-filter"
                 value={stageFilter}
                 onChange={e => { setStageFilter(e.target.value); setSearchParams(e.target.value ? { stage: e.target.value } : {}); }}
-                className="text-sm border border-app-surface-dark rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-brand-orange/20 focus:border-brand-orange/40 bg-white text-ink-900 transition-colors"
+                className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-brand-orange/20 bg-white text-ink-900 transition-colors"
               >
                 <option value="">All Stages</option>
                 {STAGES.map(s => <option key={s} value={s}>{stageLabel(s)}</option>)}
@@ -119,76 +162,117 @@ export default function OrdersList() {
             </div>
           </div>
         )}
-      </Card>
 
-      <Card>
+        {/* Table */}
         {loading ? (
           <div className="overflow-x-auto">
-            <SkeletonTable rows={8} cols={9} />
+            <SkeletonTable rows={8} cols={8} />
           </div>
+        ) : loadError ? (
+          <EmptyState
+            icon={AlertTriangle}
+            title="Orders could not be loaded"
+            description={loadError}
+            action={(
+              <button
+                onClick={loadOrders}
+                className="text-sm text-brand-orange font-medium underline underline-offset-2"
+              >
+                Retry
+              </button>
+            )}
+          />
         ) : filtered.length === 0 ? (
           <EmptyState
             icon={PackageSearch}
             title="No orders found"
-            description={activeFilters > 0 ? 'Try adjusting your search or filter criteria' : 'No orders have been created yet'}
+            description={activeFilters > 0 ? 'Try adjusting your search or filter' : 'No orders have been created yet'}
             action={activeFilters > 0 ? (
               <button
                 onClick={() => { setSearch(''); setStageFilter(''); setSearchParams({}); }}
-                className="text-sm text-brand-orange hover:text-brand-orange-dark font-medium underline underline-offset-2"
+                className="text-sm text-brand-orange font-medium underline underline-offset-2"
               >
-                Clear all filters
+                Clear filters
               </button>
             ) : undefined}
           />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm" style={{ minWidth: '860px' }}>
               <thead>
-                <tr className="bg-app-bg border-b border-app-surface-dark">
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-ink-500 uppercase tracking-wide">Order ID</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-ink-500 uppercase tracking-wide">Hospital</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-ink-500 uppercase tracking-wide">Rep</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-ink-500 uppercase tracking-wide">Stockist</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-ink-500 uppercase tracking-wide">Stage</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-ink-500 uppercase tracking-wide">ERP</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold text-ink-500 uppercase tracking-wide">Value</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold text-ink-500 uppercase tracking-wide">Updated</th>
-                  <th className="px-4 py-3 w-8" />
+                <tr className="bg-slate-50 border-b border-slate-100">
+                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider whitespace-nowrap">Order ID</th>
+                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider">Hospital</th>
+                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider whitespace-nowrap">Field Rep</th>
+                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider">Stockist</th>
+                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider">Stage</th>
+                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider whitespace-nowrap">ERP Status</th>
+                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider whitespace-nowrap">Order Type</th>
+                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider whitespace-nowrap">Rate Contract</th>
+                  <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-ink-400 uppercase tracking-wider whitespace-nowrap">Value</th>
+                  <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-ink-400 uppercase tracking-wider whitespace-nowrap">Updated</th>
+                  <th className="w-8" />
                 </tr>
               </thead>
-              <tbody className="divide-y divide-app-surface-dark">
-                {filtered.map(order => (
+              <tbody className="divide-y divide-slate-100">
+                {filtered.map(order => {
+                  const pricingMode = getOrderPricingMode(order);
+
+                  return (
                   <tr
                     key={order.id}
                     onClick={() => navigate(`/orders/${order.id}`)}
-                    className="hover:bg-app-bg cursor-pointer transition-colors group"
+                    className="hover:bg-slate-50 cursor-pointer group"
                   >
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <div className="flex items-center gap-1.5">
                         <span className="font-mono text-xs font-semibold text-ink-900">{order.order_id}</span>
                         {order.sla_breached && (
-                          <span title="SLA Breached">
-                            <AlertTriangle size={12} className="text-danger-500" />
+                          <span title="SLA Breached" className="inline-flex items-center">
+                            <AlertTriangle size={11} className="text-danger-500" />
                           </span>
                         )}
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-ink-700 font-medium">{order.hospital?.name}</td>
-                    <td className="px-4 py-3 text-ink-500">{order.field_rep?.name}</td>
-                    <td className="px-4 py-3 text-ink-500 max-w-[140px] truncate">{order.stockist?.name}</td>
                     <td className="px-4 py-3">
+                      <span className="text-ink-800 font-medium text-xs" title={order.hospital?.name}>
+                        {order.hospital?.name}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap text-xs text-ink-500">{order.field_rep?.name}</td>
+                    <td className="px-4 py-3">
+                      <span className="text-xs text-ink-500 block max-w-[130px] truncate" title={order.stockist?.name}>
+                        {order.stockist?.name}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap">
                       <Badge className={stageColor(order.stage)}>{stageLabel(order.stage)}</Badge>
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3 whitespace-nowrap">
                       <Badge className={erpStatusColor(order.erp_status)}>{erpStatusLabel(order.erp_status)}</Badge>
                     </td>
-                    <td className="px-4 py-3 text-right font-semibold text-ink-900">{formatINR(order.total_value)}</td>
-                    <td className="px-4 py-3 text-right text-xs text-ink-300">{formatDateTime(order.updated_at)}</td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <Badge className={orderPricingColor(pricingMode)}>{orderPricingLabel(pricingMode)}</Badge>
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      {rcSchemaUnavailable ? (
+                        <span className="text-xs text-amber-600">Unavailable</span>
+                      ) : order.rc?.rc_code ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-md font-mono">
+                          {order.rc.rc_code}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-ink-300">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap text-xs font-semibold text-ink-900 tabular-nums">{formatINR(order.total_value)}</td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap text-xs text-ink-400 tabular-nums">{formatDateTime(order.updated_at)}</td>
                     <td className="px-4 py-3 text-right">
-                      <ArrowUpRight size={14} className="text-ink-300 group-hover:text-ink-500 transition-colors" />
+                      <ArrowUpRight size={13} className="text-ink-300 group-hover:text-brand-orange transition-colors" />
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

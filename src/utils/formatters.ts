@@ -1,4 +1,4 @@
-import { OrderStage, ERPStatus } from '../types';
+import { OrderStage, ERPStatus, OrderPricingMode, RCStatus } from '../types';
 
 export function formatINR(amount: number): string {
   return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(amount);
@@ -51,27 +51,28 @@ export function stageLabel(stage: OrderStage): string {
 }
 
 export function stageColor(stage: OrderStage): string {
+  // 4 families only: slate (neutral), orange (action needed), blue (in-flow), green (done), red (failed)
   const map: Record<OrderStage, string> = {
-    created: 'bg-slate-100 text-slate-700',
-    hospital_confirmed: 'bg-blue-100 text-blue-700',
-    pending_manager_approval: 'bg-amber-100 text-amber-700',
-    manager_approved: 'bg-sky-100 text-sky-700',
-    pending_erp_entry: 'bg-orange-100 text-orange-700',
-    erp_entered: 'bg-cyan-100 text-cyan-700',
-    erp_sync_failed: 'bg-red-100 text-red-700',
-    division_processing: 'bg-violet-100 text-violet-700',
-    division_partially_approved: 'bg-indigo-100 text-indigo-700',
-    division_partially_rejected: 'bg-pink-100 text-pink-700',
-    final_approval_pending: 'bg-yellow-100 text-yellow-700',
-    final_approved: 'bg-emerald-100 text-emerald-700',
-    final_rejected: 'bg-red-100 text-red-700',
-    erp_sync_done: 'bg-teal-100 text-teal-700',
-    sent_to_supply_chain: 'bg-teal-100 text-teal-700',
-    sent_to_stockist: 'bg-green-100 text-green-700',
-    fulfillment_pending: 'bg-lime-100 text-lime-700',
-    completed: 'bg-green-200 text-green-800',
+    created:                      'bg-slate-100 text-slate-500',
+    hospital_confirmed:           'bg-slate-100 text-slate-500',
+    pending_manager_approval:     'bg-orange-50 text-orange-600',
+    manager_approved:             'bg-orange-50 text-orange-600',
+    pending_erp_entry:            'bg-orange-50 text-orange-600',
+    erp_entered:                  'bg-blue-50 text-blue-600',
+    erp_sync_failed:              'bg-red-50 text-red-600',
+    erp_sync_done:                'bg-blue-50 text-blue-600',
+    division_processing:          'bg-blue-50 text-blue-600',
+    division_partially_approved:  'bg-blue-50 text-blue-600',
+    division_partially_rejected:  'bg-red-50 text-red-600',
+    final_approval_pending:       'bg-orange-50 text-orange-600',
+    final_approved:               'bg-emerald-50 text-emerald-700',
+    final_rejected:               'bg-red-50 text-red-600',
+    sent_to_supply_chain:         'bg-emerald-50 text-emerald-700',
+    sent_to_stockist:             'bg-emerald-50 text-emerald-700',
+    fulfillment_pending:          'bg-emerald-50 text-emerald-700',
+    completed:                    'bg-emerald-50 text-emerald-700',
   };
-  return map[stage] || 'bg-gray-100 text-gray-700';
+  return map[stage] || 'bg-slate-100 text-slate-500';
 }
 
 export function erpStatusLabel(status: ERPStatus): string {
@@ -87,11 +88,52 @@ export function erpStatusLabel(status: ERPStatus): string {
 
 export function erpStatusColor(status: ERPStatus): string {
   const map: Record<ERPStatus, string> = {
-    pending_sync: 'bg-amber-100 text-amber-700',
-    synced: 'bg-emerald-100 text-emerald-700',
-    manual_added: 'bg-blue-100 text-blue-700',
-    sync_failed: 'bg-red-100 text-red-700',
-    resync_required: 'bg-orange-100 text-orange-700',
+    pending_sync:    'bg-slate-100 text-slate-500',
+    synced:          'bg-emerald-50 text-emerald-700',
+    manual_added:    'bg-blue-50 text-blue-600',
+    sync_failed:     'bg-red-50 text-red-600',
+    resync_required: 'bg-orange-50 text-orange-600',
   };
-  return map[status] || 'bg-gray-100 text-gray-700';
+  return map[status] || 'bg-slate-100 text-slate-500';
+}
+
+export function getOrderPricingMode(order: { pricing_mode?: OrderPricingMode | null; rc_id?: string | null }): OrderPricingMode {
+  if (order.pricing_mode === 'RC' || order.rc_id) return 'RC';
+  return 'MANUAL';
+}
+
+export function orderPricingLabel(mode: OrderPricingMode): string {
+  return mode === 'RC' ? 'RC Order' : 'Manual Order';
+}
+
+export function orderPricingColor(mode: OrderPricingMode): string {
+  return mode === 'RC' ? 'bg-indigo-50 text-indigo-700' : 'bg-slate-100 text-slate-600';
+}
+
+export function rcStatusLabel(status: RCStatus): string {
+  const map: Record<RCStatus, string> = {
+    DRAFT:    'Draft',
+    PENDING:  'Pending Approval',
+    APPROVED: 'Active',
+    REJECTED: 'Rejected',
+    EXPIRED:  'Expired',
+  };
+  return map[status] || status;
+}
+
+export function rcStatusColor(status: RCStatus): string {
+  const map: Record<RCStatus, string> = {
+    DRAFT:    'bg-slate-100 text-slate-500',
+    PENDING:  'bg-orange-50 text-orange-600',
+    APPROVED: 'bg-emerald-50 text-emerald-700',
+    REJECTED: 'bg-red-50 text-red-600',
+    EXPIRED:  'bg-slate-100 text-slate-400',
+  };
+  return map[status] || 'bg-slate-100 text-slate-500';
+}
+
+export function rcUtilizationColor(pct: number): string {
+  if (pct >= 90) return 'bg-red-500';
+  if (pct >= 70) return 'bg-amber-500';
+  return 'bg-emerald-500';
 }

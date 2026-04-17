@@ -2,11 +2,14 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Building2, User, Package, Clock, CheckCircle, XCircle,
-  AlertTriangle, ChevronDown, ChevronUp, Truck, GitBranch, Database
+  AlertTriangle, ChevronDown, ChevronUp, Truck, GitBranch, Database, Mail, Phone,
+  ScrollText, ArrowUpRight,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { Order, OrderItem, DivisionApproval, FinalApproval, OrderTimeline } from '../types';
-import { formatINR, formatDateTime, stageLabel, stageColor, erpStatusLabel, erpStatusColor, timeAgo } from '../utils/formatters';
+import { Order, OrderItem, DivisionApproval, FinalApproval, OrderTimeline, RateContract } from '../types';
+import { formatINR, formatDate, formatDateTime, getOrderPricingMode, orderPricingColor, orderPricingLabel, stageLabel, stageColor, erpStatusLabel, erpStatusColor, timeAgo, rcStatusColor } from '../utils/formatters';
+import { ensureDivisionApprovalsForOrder, syncOrderStageAfterDivisionDecision } from '../utils/orderWorkflow';
+import { getMutationError } from '../utils/supabaseWrites';
 import { useApp } from '../context/AppContext';
 import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
@@ -17,6 +20,7 @@ export default function OrderDetail() {
   const navigate = useNavigate();
   const { currentRole, currentUser, addToast } = useApp();
   const [order, setOrder] = useState<Order | null>(null);
+  const [rc, setRC] = useState<RateContract | null>(null);
   const [items, setItems] = useState<OrderItem[]>([]);
   const [divApprovals, setDivApprovals] = useState<DivisionApproval[]>([]);
   const [finalApprovals, setFinalApprovals] = useState<FinalApproval[]>([]);
@@ -31,6 +35,7 @@ export default function OrderDetail() {
 
   async function loadOrder() {
     setLoading(true);
+    setRC(null);
     const [{ data: o }, { data: oi }, { data: da }, { data: fa }, { data: tl }] = await Promise.all([
       supabase.from('orders').select('*, hospital:hospitals(*), field_rep:field_reps(*), stockist:stockists(*), cfa_user:app_users!orders_cfa_user_id_fkey(*)').eq('id', id!).maybeSingle(),
       supabase.from('order_items').select('*, division:divisions(*)').eq('order_id', id!).order('product_name'),
@@ -38,7 +43,17 @@ export default function OrderDetail() {
       supabase.from('final_approvals').select('*, approver_user:app_users(*)').eq('order_id', id!).order('sequence_order'),
       supabase.from('order_timeline').select('*').eq('order_id', id!).order('created_at', { ascending: false }),
     ]);
-    if (o) setOrder(o as Order);
+    if (o) {
+      setOrder(o as Order);
+      if ((o as Order).rc_id) {
+        const { data: rcData } = await supabase
+          .from('rate_contracts')
+          .select('*, hospital:hospitals(*)')
+          .eq('id', (o as Order).rc_id)
+          .maybeSingle();
+        if (rcData) setRC(rcData as RateContract);
+      }
+    }
     if (oi) setItems(oi as OrderItem[]);
     if (da) setDivApprovals(da as DivisionApproval[]);
     if (fa) setFinalApprovals(fa as FinalApproval[]);
@@ -47,118 +62,236 @@ export default function OrderDetail() {
   }
 
   async function handleERPSync() {
-    if (!order) return;
+    if (!order || !currentUser) return;
     const erpId = `ERP-${Math.floor(Math.random() * 900000 + 100000)}`;
-    await supabase.from('orders').update({
-      erp_status: 'synced', erp_order_id: erpId,
-      erp_synced_at: new Date().toISOString(), stage: 'erp_entered',
-      updated_at: new Date().toISOString(),
-    }).eq('id', order.id);
-    await supabase.from('order_timeline').insert({
-      order_id: order.id, actor_name: currentUser?.name || 'CFA User', actor_role: 'CFA',
-      action: `ERP entry completed. ERP ID: ${erpId}`, action_type: 'erp_synced',
-    });
-    addToast({ type: 'success', title: 'ERP Synced', message: `Order marked as ERP punched. ID: ${erpId}` });
-    loadOrder();
+    try {
+      await ensureDivisionApprovalsForOrder(order.id);
+
+      const orderUpdate = await supabase.from('orders').update({
+        erp_status: 'synced', erp_order_id: erpId,
+        erp_synced_at: new Date().toISOString(), stage: 'division_processing',
+        updated_at: new Date().toISOString(),
+      }).eq('id', order.id).select('id');
+      const orderUpdateError = getMutationError(orderUpdate, 'ERP sync could not be saved for this order.');
+      if (orderUpdateError) throw new Error(orderUpdateError);
+
+      const timelineInsert = await supabase.from('order_timeline').insert({
+        order_id: order.id, actor_name: currentUser.name, actor_role: 'CFA',
+        action: `ERP entry completed. ERP ID: ${erpId}. Sent to Division Workspace.`,
+        action_type: 'erp_synced',
+      }).select('id');
+      const timelineInsertError = getMutationError(timelineInsert, 'Order history could not be updated after ERP sync.');
+      if (timelineInsertError) throw new Error(timelineInsertError);
+
+      addToast({ type: 'success', title: 'ERP Synced', message: `Order moved to Division Workspace.` });
+      loadOrder();
+    } catch (error) {
+      addToast({
+        type: 'error',
+        title: 'ERP Sync Failed',
+        message: error instanceof Error ? error.message : 'ERP sync could not be completed.',
+      });
+    }
   }
 
   async function handleFinalERPSync() {
-    if (!order) return;
-    await supabase.from('orders').update({
-      stage: 'erp_sync_done', erp_status: 'synced',
-      erp_synced_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-    }).eq('id', order.id);
-    await supabase.from('order_timeline').insert({
-      order_id: order.id, actor_name: currentUser?.name || 'Final Approver', actor_role: 'Final Approver',
-      action: 'Final ERP sync confirmed. Order marked as ERP Sync Done.', action_type: 'erp_sync_done',
-    });
-    addToast({ type: 'success', title: 'Final ERP Sync Done', message: `Order ${order.order_id} synced to ERP.` });
-    loadOrder();
+    if (!order || !currentUser) return;
+    try {
+      const orderUpdate = await supabase.from('orders').update({
+        stage: 'erp_sync_done', erp_status: 'synced',
+        erp_synced_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      }).eq('id', order.id).select('id');
+      const orderUpdateError = getMutationError(orderUpdate, 'The ERP sync confirmation could not be saved.');
+      if (orderUpdateError) throw new Error(orderUpdateError);
+
+      const timelineInsert = await supabase.from('order_timeline').insert({
+        order_id: order.id, actor_name: currentUser.name, actor_role: 'Final Approver',
+        action: 'Final ERP sync confirmed. Order marked as ERP Sync Done.', action_type: 'erp_sync_done',
+      }).select('id');
+      const timelineInsertError = getMutationError(timelineInsert, 'Order history could not be updated after ERP sync.');
+      if (timelineInsertError) throw new Error(timelineInsertError);
+
+      addToast({ type: 'success', title: 'Final ERP Sync Done', message: `Order ${order.order_id} synced to ERP.` });
+      loadOrder();
+    } catch (error) {
+      addToast({
+        type: 'error',
+        title: 'ERP Sync Failed',
+        message: error instanceof Error ? error.message : 'Final ERP sync could not be completed.',
+      });
+    }
   }
 
   async function handleDivisionApprove() {
     if (!order || !currentUser) return;
     const divId = currentUser.division_id;
     if (!divId) return;
-    await supabase.from('division_approvals').update({
-      status: 'approved', approver_user_id: currentUser.id,
-      decided_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-    }).eq('order_id', order.id).eq('division_id', divId);
-    await supabase.from('order_items').update({ status: 'approved' })
-      .eq('order_id', order.id).eq('division_id', divId).eq('status', 'pending');
-    await supabase.from('order_timeline').insert({
-      order_id: order.id, actor_name: currentUser.name, actor_role: 'Division Approver',
-      action: `${currentUser.division?.name} division approved all items`, action_type: 'division_approved',
-    });
-    addToast({ type: 'success', title: 'Division Approved', message: 'Your division items have been approved.' });
-    setApproveModal(false);
-    loadOrder();
+    try {
+      const approvalUpdate = await supabase.from('division_approvals').update({
+        status: 'approved', approver_user_id: currentUser.id,
+        decided_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      }).eq('order_id', order.id).eq('division_id', divId).select('id');
+      const approvalUpdateError = getMutationError(approvalUpdate, 'The division approval could not be saved.');
+      if (approvalUpdateError) throw new Error(approvalUpdateError);
+
+      const itemsUpdate = await supabase.from('order_items').update({ status: 'approved' })
+        .eq('order_id', order.id).eq('division_id', divId).eq('status', 'pending').select('id');
+      const itemsUpdateError = getMutationError(itemsUpdate, 'The division item approvals could not be saved.');
+      if (itemsUpdateError) throw new Error(itemsUpdateError);
+
+      const nextStage = await syncOrderStageAfterDivisionDecision(order.id);
+
+      const timelineInsert = await supabase.from('order_timeline').insert({
+        order_id: order.id, actor_name: currentUser.name, actor_role: 'Division Approver',
+        action: `${currentUser.division?.name} division approved all items. Order moved to ${stageLabel(nextStage)}.`,
+        action_type: 'division_approved',
+      }).select('id');
+      const timelineInsertError = getMutationError(timelineInsert, 'Order history could not be updated after division approval.');
+      if (timelineInsertError) throw new Error(timelineInsertError);
+
+      addToast({ type: 'success', title: 'Division Approved', message: 'Your division items have been approved.' });
+      setApproveModal(false);
+      loadOrder();
+    } catch (error) {
+      addToast({
+        type: 'error',
+        title: 'Approval Failed',
+        message: error instanceof Error ? error.message : 'The division approval could not be completed.',
+      });
+    }
   }
 
   async function handleDivisionReject() {
     if (!order || !currentUser || !rejectReason.trim()) return;
     const divId = currentUser.division_id;
     if (!divId) return;
-    await supabase.from('division_approvals').update({
-      status: 'rejected', rejection_reason: rejectReason, approver_user_id: currentUser.id,
-      decided_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-    }).eq('order_id', order.id).eq('division_id', divId);
-    await supabase.from('order_items').update({ status: 'rejected', rejection_reason: rejectReason })
-      .eq('order_id', order.id).eq('division_id', divId);
-    await supabase.from('order_timeline').insert({
-      order_id: order.id, actor_name: currentUser.name, actor_role: 'Division Approver',
-      action: `${currentUser.division?.name} division rejected: ${rejectReason}`, action_type: 'division_rejected',
-    });
-    addToast({ type: 'warning', title: 'Division Rejected', message: 'Your division items have been rejected.' });
-    setRejectModal(false);
-    setRejectReason('');
-    loadOrder();
+    try {
+      const approvalUpdate = await supabase.from('division_approvals').update({
+        status: 'rejected', rejection_reason: rejectReason, approver_user_id: currentUser.id,
+        decided_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      }).eq('order_id', order.id).eq('division_id', divId).select('id');
+      const approvalUpdateError = getMutationError(approvalUpdate, 'The division rejection could not be saved.');
+      if (approvalUpdateError) throw new Error(approvalUpdateError);
+
+      const itemsUpdate = await supabase.from('order_items').update({ status: 'rejected', rejection_reason: rejectReason })
+        .eq('order_id', order.id).eq('division_id', divId).select('id');
+      const itemsUpdateError = getMutationError(itemsUpdate, 'The rejected division items could not be saved.');
+      if (itemsUpdateError) throw new Error(itemsUpdateError);
+
+      const nextStage = await syncOrderStageAfterDivisionDecision(order.id);
+
+      const timelineInsert = await supabase.from('order_timeline').insert({
+        order_id: order.id, actor_name: currentUser.name, actor_role: 'Division Approver',
+        action: `${currentUser.division?.name} division rejected: ${rejectReason}. Order moved to ${stageLabel(nextStage)}.`,
+        action_type: 'division_rejected',
+      }).select('id');
+      const timelineInsertError = getMutationError(timelineInsert, 'Order history could not be updated after division rejection.');
+      if (timelineInsertError) throw new Error(timelineInsertError);
+
+      addToast({ type: 'warning', title: 'Division Rejected', message: 'Your division items have been rejected.' });
+      setRejectModal(false);
+      setRejectReason('');
+      loadOrder();
+    } catch (error) {
+      addToast({
+        type: 'error',
+        title: 'Rejection Failed',
+        message: error instanceof Error ? error.message : 'The division rejection could not be completed.',
+      });
+    }
   }
 
   async function handleFinalApprove() {
     if (!order || !currentUser) return;
-    await supabase.from('final_approvals').update({
-      status: 'approved', decided_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-    }).eq('order_id', order.id).eq('approver_user_id', currentUser.id);
-    const { data: allFinal } = await supabase.from('final_approvals').select('*').eq('order_id', order.id);
-    const allApproved = allFinal?.every(fa => fa.status === 'approved');
-    if (allApproved) {
-      await supabase.from('orders').update({ stage: 'final_approved', updated_at: new Date().toISOString() }).eq('id', order.id);
-      await supabase.from('order_timeline').insert({
-        order_id: order.id, actor_name: currentUser.name, actor_role: 'Final Approver',
-        action: 'All final approvers cleared. Order is final approved.', action_type: 'final_approved',
+    try {
+      const approvalUpdate = await supabase.from('final_approvals').update({
+        status: 'approved', decided_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      }).eq('order_id', order.id).eq('approver_user_id', currentUser.id).select('id');
+      const approvalUpdateError = getMutationError(approvalUpdate, 'The final approval could not be saved.');
+      if (approvalUpdateError) throw new Error(approvalUpdateError);
+
+      const { data: allFinal } = await supabase.from('final_approvals').select('*').eq('order_id', order.id);
+      const allApproved = allFinal?.every(fa => fa.status === 'approved');
+      if (allApproved) {
+        const orderUpdate = await supabase.from('orders').update({
+          stage: 'final_approved',
+          updated_at: new Date().toISOString(),
+        }).eq('id', order.id).select('id');
+        const orderUpdateError = getMutationError(orderUpdate, 'The order could not be marked as final approved.');
+        if (orderUpdateError) throw new Error(orderUpdateError);
+
+        const timelineInsert = await supabase.from('order_timeline').insert({
+          order_id: order.id, actor_name: currentUser.name, actor_role: 'Final Approver',
+          action: 'All final approvers cleared. Order is final approved.', action_type: 'final_approved',
+        }).select('id');
+        const timelineInsertError = getMutationError(timelineInsert, 'Order history could not be updated after final approval.');
+        if (timelineInsertError) throw new Error(timelineInsertError);
+
+        const notificationsInsert = await supabase.from('notifications_log').insert({
+          order_id: order.id, notification_type: 'supply_chain_email',
+          recipient_email: 'supplychain@swishx.com', recipient_name: 'Supply Chain Team',
+          subject: `Order ${order.order_id} Final Approved - Dispatch Ready`, status: 'sent',
+        }).select('id');
+        const notificationsInsertError = getMutationError(notificationsInsert, 'Notification history could not be recorded.');
+        if (notificationsInsertError) throw new Error(notificationsInsertError);
+
+        addToast({ type: 'success', title: 'Final Approved!', message: 'Order finalized. Supply chain email triggered.' });
+      } else {
+        const timelineInsert = await supabase.from('order_timeline').insert({
+          order_id: order.id, actor_name: currentUser.name, actor_role: 'Final Approver',
+          action: `${currentUser.name} approved. Awaiting other approvers.`, action_type: 'final_approved',
+        }).select('id');
+        const timelineInsertError = getMutationError(timelineInsert, 'Order history could not be updated after approval.');
+        if (timelineInsertError) throw new Error(timelineInsertError);
+
+        addToast({ type: 'info', title: 'Approval Recorded', message: 'Awaiting other final approvers.' });
+      }
+
+      setApproveModal(false);
+      loadOrder();
+    } catch (error) {
+      addToast({
+        type: 'error',
+        title: 'Approval Failed',
+        message: error instanceof Error ? error.message : 'The final approval could not be completed.',
       });
-      await supabase.from('notifications_log').insert({
-        order_id: order.id, notification_type: 'supply_chain_email',
-        recipient_email: 'supplychain@swishx.com', recipient_name: 'Supply Chain Team',
-        subject: `Order ${order.order_id} Final Approved - Dispatch Ready`, status: 'sent',
-      });
-      addToast({ type: 'success', title: 'Final Approved!', message: 'Order finalized. Supply chain email triggered.' });
-    } else {
-      await supabase.from('order_timeline').insert({
-        order_id: order.id, actor_name: currentUser.name, actor_role: 'Final Approver',
-        action: `${currentUser.name} approved. Awaiting other approvers.`, action_type: 'final_approved',
-      });
-      addToast({ type: 'info', title: 'Approval Recorded', message: 'Awaiting other final approvers.' });
     }
-    setApproveModal(false);
-    loadOrder();
   }
 
   async function handleFinalReject() {
     if (!order || !currentUser || !rejectReason.trim()) return;
-    await supabase.from('final_approvals').update({
-      status: 'rejected', rejection_reason: rejectReason, decided_at: new Date().toISOString(),
-    }).eq('order_id', order.id).eq('approver_user_id', currentUser.id);
-    await supabase.from('orders').update({ stage: 'final_rejected', updated_at: new Date().toISOString() }).eq('id', order.id);
-    await supabase.from('order_timeline').insert({
-      order_id: order.id, actor_name: currentUser.name, actor_role: 'Final Approver',
-      action: `Order rejected: ${rejectReason}`, action_type: 'final_rejected',
-    });
-    addToast({ type: 'error', title: 'Order Rejected', message: 'Final rejection recorded.' });
-    setRejectModal(false);
-    setRejectReason('');
-    loadOrder();
+    try {
+      const approvalUpdate = await supabase.from('final_approvals').update({
+        status: 'rejected', rejection_reason: rejectReason, decided_at: new Date().toISOString(),
+      }).eq('order_id', order.id).eq('approver_user_id', currentUser.id).select('id');
+      const approvalUpdateError = getMutationError(approvalUpdate, 'The final rejection could not be saved.');
+      if (approvalUpdateError) throw new Error(approvalUpdateError);
+
+      const orderUpdate = await supabase.from('orders').update({
+        stage: 'final_rejected',
+        updated_at: new Date().toISOString(),
+      }).eq('id', order.id).select('id');
+      const orderUpdateError = getMutationError(orderUpdate, 'The order could not be marked as rejected.');
+      if (orderUpdateError) throw new Error(orderUpdateError);
+
+      const timelineInsert = await supabase.from('order_timeline').insert({
+        order_id: order.id, actor_name: currentUser.name, actor_role: 'Final Approver',
+        action: `Order rejected: ${rejectReason}`, action_type: 'final_rejected',
+      }).select('id');
+      const timelineInsertError = getMutationError(timelineInsert, 'Order history could not be updated after rejection.');
+      if (timelineInsertError) throw new Error(timelineInsertError);
+
+      addToast({ type: 'error', title: 'Order Rejected', message: 'Final rejection recorded.' });
+      setRejectModal(false);
+      setRejectReason('');
+      loadOrder();
+    } catch (error) {
+      addToast({
+        type: 'error',
+        title: 'Rejection Failed',
+        message: error instanceof Error ? error.message : 'The final rejection could not be completed.',
+      });
+    }
   }
 
   const myDivApproval = divApprovals.find(da => da.division_id === currentUser?.division_id);
@@ -216,6 +349,10 @@ export default function OrderDetail() {
 
   const totalValue = items.filter(i => i.status !== 'rejected' && i.status !== 'removed')
     .reduce((sum, i) => sum + ((i.final_quantity ?? i.quantity) * (i.final_price ?? i.unit_price)), 0);
+  const pricingMode = getOrderPricingMode(order);
+  const fieldRepName = order.field_rep?.name?.trim() || 'Unavailable';
+  const fieldRepEmail = order.field_rep?.email?.trim() || 'Unavailable';
+  const fieldRepPhone = order.field_rep?.phone?.trim() || 'Unavailable';
 
   return (
     <div className="space-y-5 max-w-6xl mx-auto">
@@ -233,6 +370,7 @@ export default function OrderDetail() {
               <h1 className="text-xl font-bold text-slate-900 font-mono">{order.order_id}</h1>
               <Badge className={stageColor(order.stage)}>{stageLabel(order.stage)}</Badge>
               <Badge className={erpStatusColor(order.erp_status)}>{erpStatusLabel(order.erp_status)}</Badge>
+              <Badge className={orderPricingColor(pricingMode)}>{orderPricingLabel(pricingMode)}</Badge>
               {order.sla_breached && (
                 <span className="flex items-center gap-1 text-xs text-red-700 font-semibold bg-red-50 border border-red-200 px-2 py-0.5 rounded-full">
                   <AlertTriangle size={11} /> SLA Breached
@@ -261,8 +399,18 @@ export default function OrderDetail() {
             <p className="text-xs text-slate-400 mb-1.5 flex items-center gap-1.5 font-medium uppercase tracking-wide">
               <User size={11} /> Field Rep
             </p>
-            <p className="text-sm font-semibold text-slate-800">{order.field_rep?.name}</p>
-            <p className="text-xs text-slate-500 mt-0.5">Mgr: {order.manager_name}</p>
+            <p className="text-sm font-semibold text-slate-800">{fieldRepName}</p>
+            <div className="mt-1.5 space-y-1 text-xs text-slate-500">
+              <p className="flex items-center gap-1.5">
+                <Mail size={11} className="text-slate-400" />
+                <span className="break-all">{fieldRepEmail}</span>
+              </p>
+              <p className="flex items-center gap-1.5">
+                <Phone size={11} className="text-slate-400" />
+                <span>{fieldRepPhone}</span>
+              </p>
+              <p>Mgr: {order.manager_name || 'Unavailable'}</p>
+            </div>
           </div>
           <div>
             <p className="text-xs text-slate-400 mb-1.5 flex items-center gap-1.5 font-medium uppercase tracking-wide">
@@ -282,6 +430,35 @@ export default function OrderDetail() {
           </div>
         </div>
       </Card>
+
+      {/* RC context block */}
+      {rc ? (
+        <div className="flex items-center gap-4 px-4 py-3 bg-indigo-50 border border-indigo-100 rounded-2xl">
+          <div className="w-8 h-8 bg-indigo-100 rounded-xl flex items-center justify-center shrink-0">
+            <ScrollText size={15} className="text-indigo-600" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-xs font-bold text-indigo-800">{rc.rc_code}</span>
+              <Badge className={rcStatusColor(rc.status)}>{rc.status === 'APPROVED' ? 'Active' : rc.status}</Badge>
+            </div>
+            <p className="text-xs text-indigo-600 mt-0.5">
+              Validity: {formatDate(rc.valid_from)} – {formatDate(rc.valid_to)} · This order follows the approved hospital rate contract
+            </p>
+          </div>
+          <button
+            onClick={() => navigate(`/rate-contracts/${rc.id}`)}
+            className="text-xs text-indigo-600 font-semibold flex items-center gap-1 hover:text-indigo-800 transition-colors shrink-0"
+          >
+            View RC <ArrowUpRight size={11} />
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-3 px-4 py-2.5 bg-slate-50 border border-slate-100 rounded-2xl">
+          <ScrollText size={13} className="text-slate-400 shrink-0" />
+          <p className="text-xs text-slate-500">This is a manual order with hospital-specific pricing entered during order creation.</p>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2 space-y-5">

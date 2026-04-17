@@ -10,9 +10,9 @@ interface CardProps {
 }
 
 const variantClasses: Record<CardVariant, string> = {
-  default: 'bg-app-surface rounded-2xl border border-app-surface-dark',
-  flat: 'bg-app-surface rounded-2xl',
-  elevated: 'bg-app-surface rounded-2xl border border-app-surface-dark shadow-sm',
+  default: 'bg-white rounded-2xl shadow-card border border-slate-100/80',
+  flat: 'bg-white rounded-2xl border border-slate-100/80',
+  elevated: 'bg-white rounded-2xl shadow-card-lg border border-slate-100/80',
 };
 
 const paddingClasses: Record<CardPadding, string> = {
@@ -26,7 +26,7 @@ export default function Card({ className = '', children, onClick, variant = 'def
   return (
     <div
       className={`${variantClasses[variant]} ${paddingClasses[padding]} ${
-        onClick ? 'cursor-pointer hover:border-primary-300 hover:shadow-sm transition-all duration-150' : ''
+        onClick ? 'cursor-pointer hover:shadow-card-hover hover:border-slate-200 transition-all duration-200' : ''
       } ${className}`}
       onClick={onClick}
     >

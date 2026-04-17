@@ -28,6 +28,7 @@ export interface Hospital {
   state: string;
   contact_name: string;
   contact_phone: string;
+  contact_email: string | null;
 }
 
 export interface Stockist {
@@ -41,6 +42,7 @@ export interface Stockist {
 export interface FieldRep {
   id: string;
   name: string;
+  email: string | null;
   phone: string;
   region: string;
   manager_name: string;
@@ -67,6 +69,7 @@ export type OrderStage =
   | 'completed';
 
 export type ERPStatus = 'pending_sync' | 'synced' | 'manual_added' | 'sync_failed' | 'resync_required';
+export type OrderPricingMode = 'RC' | 'MANUAL';
 
 export interface Order {
   id: string;
@@ -87,10 +90,13 @@ export interface Order {
   notes: string;
   created_at: string;
   updated_at: string;
+  rc_id: string | null;
+  pricing_mode: OrderPricingMode | null;
   hospital?: Hospital;
   field_rep?: FieldRep;
   stockist?: Stockist;
   cfa_user?: AppUser;
+  rc?: RateContract;
   order_items?: OrderItem[];
   division_approvals?: DivisionApproval[];
   final_approvals?: FinalApproval[];
@@ -108,6 +114,9 @@ export interface OrderItem {
   status: 'pending' | 'approved' | 'rejected' | 'removed';
   rejection_reason: string;
   notes: string;
+  rc_item_id: string | null;
+  pricing_source: 'RC' | 'MANUAL' | null;
+  locked_price: boolean;
   division?: Division;
 }
 
@@ -187,4 +196,63 @@ export interface Toast {
   type: 'success' | 'error' | 'info' | 'warning';
   title: string;
   message: string;
+}
+
+// ─── Rate Contracts ───────────────────────────────────────────────────────────
+
+export type RCStatus = 'DRAFT' | 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXPIRED';
+
+export interface RateContract {
+  id: string;
+  rc_code: string;
+  hospital_id: string;
+  rep_id: string | null;
+  status: RCStatus;
+  valid_from: string;
+  valid_to: string;
+  total_value: number;
+  notes: string;
+  created_at: string;
+  updated_at: string;
+  hospital?: Hospital;
+  field_rep?: FieldRep;
+  items?: RateContractItem[];
+}
+
+export interface RateContractItem {
+  id: string;
+  rc_id: string;
+  product_id: string | null;
+  product_name: string;
+  division_id: string | null;
+  negotiated_price: number;
+  expected_qty: number;
+  cap_qty: number | null;
+  used_qty: number;
+  division?: Division;
+}
+
+export interface RateContractApproval {
+  id: string;
+  rc_id: string;
+  approval_stage: 'division' | 'final';
+  division_id: string | null;
+  approver_user_id: string | null;
+  approver_name: string;
+  sequence_order: number;
+  status: 'pending' | 'approved' | 'rejected';
+  rejection_reason: string;
+  decided_at: string | null;
+  division?: Division;
+  approver_user?: AppUser;
+}
+
+export interface RCTimeline {
+  id: string;
+  rc_id: string;
+  actor_name: string;
+  actor_role: string;
+  action: string;
+  action_type: string;
+  created_at: string;
 }

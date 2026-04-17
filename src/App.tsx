@@ -7,6 +7,8 @@ import OrderDetail from './pages/OrderDetail';
 import CFAQueue from './pages/CFAQueue';
 import DivisionWorkspace from './pages/DivisionWorkspace';
 import FinalApproval from './pages/FinalApproval';
+import RateContracts from './pages/RateContracts';
+import RateContractDetail from './pages/RateContractDetail';
 import Reports from './pages/Reports';
 import Config from './pages/Config';
 
@@ -17,8 +19,10 @@ export default function App() {
         <Routes>
           <Route element={<Layout />}>
             <Route path="/" element={<Dashboard />} />
-            <Route path="/orders" element={<OrdersList />} />
-            <Route path="/orders/:id" element={<OrderDetail />} />
+             <Route path="/orders" element={<OrdersList />} />
+             <Route path="/orders/:id" element={<OrderDetail />} />
+             <Route path="/rate-contracts" element={<RateContracts />} />
+             <Route path="/rate-contracts/:id" element={<RateContractDetail />} />
             <Route path="/cfa-queue" element={<CFAQueue />} />
             <Route path="/division" element={<DivisionWorkspace />} />
             <Route path="/final-approval" element={<FinalApproval />} />

@@ -4,6 +4,8 @@ import { Plus, CheckCircle, AlertTriangle, ArrowUpRight, X, XCircle } from 'luci
 import { supabase } from '../lib/supabase';
 import { Order, Division, Hospital, FieldRep, Stockist } from '../types';
 import { formatINR, stageLabel, stageColor, erpStatusColor, erpStatusLabel, timeAgo } from '../utils/formatters';
+import { ensureDivisionApprovalsForOrder } from '../utils/orderWorkflow';
+import { getMutationError } from '../utils/supabaseWrites';
 import { useApp } from '../context/AppContext';
 import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
@@ -69,81 +71,139 @@ export default function CFAQueue() {
 
   async function handleMarkERP() {
     if (!erpModal || !erpInput.trim() || !currentUser) return;
-    await supabase.from('orders').update({
-      erp_status: 'synced',
-      erp_order_id: erpInput,
-      erp_synced_at: new Date().toISOString(),
-      stage: 'erp_entered',
-      updated_at: new Date().toISOString(),
-    }).eq('id', erpModal.orderId);
-    await supabase.from('order_timeline').insert({
-      order_id: erpModal.orderId,
-      actor_name: currentUser.name,
-      actor_role: 'CFA',
-      action: `ERP entry completed. ERP ID: ${erpInput}`,
-      action_type: 'erp_synced',
-    });
-    addToast({ type: 'success', title: 'ERP Marked', message: `Order ${erpModal.orderNum} synced with ERP ID: ${erpInput}` });
-    setERPModal(null);
-    setErpInput('');
-    loadData();
+    try {
+      await ensureDivisionApprovalsForOrder(erpModal.orderId);
+
+      const orderUpdate = await supabase.from('orders').update({
+        erp_status: 'synced',
+        erp_order_id: erpInput,
+        erp_synced_at: new Date().toISOString(),
+        stage: 'division_processing',
+        updated_at: new Date().toISOString(),
+      }).eq('id', erpModal.orderId).select('id');
+      const orderUpdateError = getMutationError(orderUpdate, 'ERP update could not be saved for this order.');
+      if (orderUpdateError) throw new Error(orderUpdateError);
+
+      const timelineInsert = await supabase.from('order_timeline').insert({
+        order_id: erpModal.orderId,
+        actor_name: currentUser.name,
+        actor_role: 'CFA',
+        action: `ERP entry completed. ERP ID: ${erpInput}. Sent to Division Workspace.`,
+        action_type: 'erp_synced',
+      }).select('id');
+      const timelineInsertError = getMutationError(timelineInsert, 'Order history could not be updated after ERP sync.');
+      if (timelineInsertError) throw new Error(timelineInsertError);
+
+      addToast({ type: 'success', title: 'ERP Marked', message: `Order ${erpModal.orderNum} moved to Division Workspace.` });
+      setERPModal(null);
+      setErpInput('');
+      loadData();
+    } catch (error) {
+      addToast({
+        type: 'error',
+        title: 'ERP Update Failed',
+        message: error instanceof Error ? error.message : 'ERP update could not be completed.',
+      });
+    }
   }
 
   async function handleMarkSyncFailed(order: Order) {
     if (!currentUser) return;
-    await supabase.from('orders').update({
-      erp_status: 'sync_failed',
-      stage: 'erp_sync_failed',
-      updated_at: new Date().toISOString(),
-    }).eq('id', order.id);
-    await supabase.from('order_timeline').insert({
-      order_id: order.id,
-      actor_name: currentUser.name,
-      actor_role: 'CFA',
-      action: `ERP sync marked as failed by ${currentUser.name}. Recovery action required.`,
-      action_type: 'erp_sync_failed',
-    });
-    addToast({ type: 'error', title: 'Sync Failed', message: `Order ${order.order_id} marked as ERP sync failed.` });
-    loadData();
+    try {
+      const orderUpdate = await supabase.from('orders').update({
+        erp_status: 'sync_failed',
+        stage: 'erp_sync_failed',
+        updated_at: new Date().toISOString(),
+      }).eq('id', order.id).select('id');
+      const orderUpdateError = getMutationError(orderUpdate, 'ERP failure status could not be saved.');
+      if (orderUpdateError) throw new Error(orderUpdateError);
+
+      const timelineInsert = await supabase.from('order_timeline').insert({
+        order_id: order.id,
+        actor_name: currentUser.name,
+        actor_role: 'CFA',
+        action: `ERP sync marked as failed by ${currentUser.name}. Recovery action required.`,
+        action_type: 'erp_sync_failed',
+      }).select('id');
+      const timelineInsertError = getMutationError(timelineInsert, 'Order history could not be updated for the sync failure.');
+      if (timelineInsertError) throw new Error(timelineInsertError);
+
+      addToast({ type: 'error', title: 'Sync Failed', message: `Order ${order.order_id} marked as ERP sync failed.` });
+      loadData();
+    } catch (error) {
+      addToast({
+        type: 'error',
+        title: 'Update Failed',
+        message: error instanceof Error ? error.message : 'ERP failure update could not be completed.',
+      });
+    }
   }
 
   async function handleRetrySync(order: Order) {
     if (!currentUser) return;
-    await supabase.from('orders').update({
-      erp_status: 'resync_required',
-      stage: 'pending_erp_entry',
-      updated_at: new Date().toISOString(),
-    }).eq('id', order.id);
-    await supabase.from('order_timeline').insert({
-      order_id: order.id,
-      actor_name: currentUser.name,
-      actor_role: 'CFA',
-      action: `ERP sync retry initiated. Order returned to pending ERP entry.`,
-      action_type: 'erp_retry',
-    });
-    addToast({ type: 'info', title: 'Retry Initiated', message: `Order ${order.order_id} queued for ERP re-sync.` });
-    setSyncFailModal(null);
-    loadData();
+    try {
+      const orderUpdate = await supabase.from('orders').update({
+        erp_status: 'resync_required',
+        stage: 'pending_erp_entry',
+        updated_at: new Date().toISOString(),
+      }).eq('id', order.id).select('id');
+      const orderUpdateError = getMutationError(orderUpdate, 'Retry status could not be saved.');
+      if (orderUpdateError) throw new Error(orderUpdateError);
+
+      const timelineInsert = await supabase.from('order_timeline').insert({
+        order_id: order.id,
+        actor_name: currentUser.name,
+        actor_role: 'CFA',
+        action: `ERP sync retry initiated. Order returned to pending ERP entry.`,
+        action_type: 'erp_retry',
+      }).select('id');
+      const timelineInsertError = getMutationError(timelineInsert, 'Order history could not be updated for the retry.');
+      if (timelineInsertError) throw new Error(timelineInsertError);
+
+      addToast({ type: 'info', title: 'Retry Initiated', message: `Order ${order.order_id} queued for ERP re-sync.` });
+      setSyncFailModal(null);
+      loadData();
+    } catch (error) {
+      addToast({
+        type: 'error',
+        title: 'Retry Failed',
+        message: error instanceof Error ? error.message : 'ERP retry could not be queued.',
+      });
+    }
   }
 
   async function handleEditAndRetrySync(order: Order, newErpId: string) {
     if (!currentUser) return;
-    await supabase.from('orders').update({
-      erp_order_id: newErpId,
-      erp_status: 'resync_required',
-      stage: 'pending_erp_entry',
-      updated_at: new Date().toISOString(),
-    }).eq('id', order.id);
-    await supabase.from('order_timeline').insert({
-      order_id: order.id,
-      actor_name: currentUser.name,
-      actor_role: 'CFA',
-      action: `ERP ID updated to ${newErpId} and retry initiated.`,
-      action_type: 'erp_retry',
-    });
-    addToast({ type: 'info', title: 'ERP Updated & Retry', message: `Order ${order.order_id} updated with new ERP ID and queued for re-sync.` });
-    setSyncFailModal(null);
-    loadData();
+    try {
+      const orderUpdate = await supabase.from('orders').update({
+        erp_order_id: newErpId,
+        erp_status: 'resync_required',
+        stage: 'pending_erp_entry',
+        updated_at: new Date().toISOString(),
+      }).eq('id', order.id).select('id');
+      const orderUpdateError = getMutationError(orderUpdate, 'The ERP ID could not be updated.');
+      if (orderUpdateError) throw new Error(orderUpdateError);
+
+      const timelineInsert = await supabase.from('order_timeline').insert({
+        order_id: order.id,
+        actor_name: currentUser.name,
+        actor_role: 'CFA',
+        action: `ERP ID updated to ${newErpId} and retry initiated.`,
+        action_type: 'erp_retry',
+      }).select('id');
+      const timelineInsertError = getMutationError(timelineInsert, 'Order history could not be updated for the ERP retry.');
+      if (timelineInsertError) throw new Error(timelineInsertError);
+
+      addToast({ type: 'info', title: 'ERP Updated & Retry', message: `Order ${order.order_id} updated with new ERP ID and queued for re-sync.` });
+      setSyncFailModal(null);
+      loadData();
+    } catch (error) {
+      addToast({
+        type: 'error',
+        title: 'Retry Failed',
+        message: error instanceof Error ? error.message : 'ERP retry could not be updated.',
+      });
+    }
   }
 
   function handleOpenManualFromFailure(order: Order) {
@@ -161,54 +221,62 @@ export default function CFAQueue() {
     items: { productId: string; productName: string; divisionId: string; quantity: number; unitPrice: number }[];
   }) {
     if (!currentUser) return;
-    const orderId = `ORD-${new Date().getFullYear()}-${String(Math.floor(Math.random() * 90000 + 10000))}`;
-    const totalValue = params.items.reduce((sum, i) => sum + i.quantity * i.unitPrice, 0);
-    const { data: o } = await supabase.from('orders').insert({
-      order_id: orderId,
-      hospital_id: params.hospitalId,
-      stockist_id: params.stockistId,
-      field_rep_id: params.repId,
-      cfa_user_id: currentUser.id,
-      stage: 'division_processing',
-      erp_status: 'manual_added',
-      manager_name: 'Manual Entry',
-      manager_approved_at: new Date().toISOString(),
-      total_value: totalValue,
-      notes: `[Manually Created Order] ${params.notes}`,
-    }).select().maybeSingle();
-    if (o) {
-      const divIds = [...new Set(params.items.map(i => i.divisionId))];
-      await Promise.all([
-        supabase.from('order_items').insert(
-          params.items.map(item => ({
-            order_id: o.id,
-            product_name: item.productName,
-            division_id: item.divisionId,
-            quantity: item.quantity,
-            unit_price: item.unitPrice,
-            status: 'pending',
-          }))
-        ),
-        supabase.from('division_approvals').insert(
-          divIds.map(divId => ({
-            order_id: o.id,
-            division_id: divId,
-            status: 'pending',
-          }))
-        ),
-        supabase.from('order_timeline').insert({
-          order_id: o.id,
-          actor_name: currentUser.name,
-          actor_role: 'CFA',
-          action: `Manually created order with ${params.items.length} product(s) totalling ${formatINR(totalValue)}. Flagged as manually created.`,
-          action_type: 'created',
-        }),
-      ]);
+    try {
+      const orderId = `ORD-${new Date().getFullYear()}-${String(Math.floor(Math.random() * 90000 + 10000))}`;
+      const totalValue = params.items.reduce((sum, i) => sum + i.quantity * i.unitPrice, 0);
+      const orderInsert = await supabase.from('orders').insert({
+        order_id: orderId,
+        hospital_id: params.hospitalId,
+        stockist_id: params.stockistId,
+        field_rep_id: params.repId,
+        cfa_user_id: currentUser.id,
+        stage: 'division_processing',
+        erp_status: 'manual_added',
+        manager_name: 'Manual Entry',
+        manager_approved_at: new Date().toISOString(),
+        total_value: totalValue,
+        notes: `[Manually Created Order] ${params.notes}`,
+      }).select('id').maybeSingle();
+      const orderInsertError = getMutationError(orderInsert, 'Manual order could not be created.');
+      if (orderInsertError || !orderInsert.data) throw new Error(orderInsertError || 'Manual order could not be created.');
+      const createdOrderId = orderInsert.data.id;
+
+      const itemInsert = await supabase.from('order_items').insert(
+        params.items.map(item => ({
+          order_id: createdOrderId,
+          product_name: item.productName,
+          division_id: item.divisionId,
+          quantity: item.quantity,
+          unit_price: item.unitPrice,
+          status: 'pending',
+        }))
+      ).select('id');
+      const itemInsertError = getMutationError(itemInsert, 'Manual order items could not be created.');
+      if (itemInsertError) throw new Error(itemInsertError);
+
+      await ensureDivisionApprovalsForOrder(createdOrderId);
+
+      const timelineInsert = await supabase.from('order_timeline').insert({
+        order_id: createdOrderId,
+        actor_name: currentUser.name,
+        actor_role: 'CFA',
+        action: `Manually created order with ${params.items.length} product(s) totalling ${formatINR(totalValue)}. Flagged as manually created.`,
+        action_type: 'created',
+      }).select('id');
+      const timelineInsertError = getMutationError(timelineInsert, 'Manual order history could not be created.');
+      if (timelineInsertError) throw new Error(timelineInsertError);
+
+      addToast({ type: 'success', title: 'Manual Order Created', message: `Order ${orderId} created and sent to division approval.` });
+      setCreateModal(false);
+      setManualPrefill(null);
+      loadData();
+    } catch (error) {
+      addToast({
+        type: 'error',
+        title: 'Manual Order Failed',
+        message: error instanceof Error ? error.message : 'Manual order could not be created.',
+      });
     }
-    addToast({ type: 'success', title: 'Manual Order Created', message: `Order ${orderId} created and sent to division approval.` });
-    setCreateModal(false);
-    setManualPrefill(null);
-    loadData();
   }
 
   const displayOrders = activeTab === 'pending' ? pending : activeTab === 'failed' ? failed : history;
