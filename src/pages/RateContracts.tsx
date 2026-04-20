@@ -162,7 +162,9 @@ export default function RateContracts() {
         };
       });
       if (round2Rows.length > 0) {
-        await supabase.from('rate_contract_approvals').insert(round2Rows);
+        const approvalsInsert = await supabase.from('rate_contract_approvals').insert(round2Rows).select('id');
+        const approvalsInsertError = getMutationError(approvalsInsert, 'Round 2 division approvals could not be created.');
+        if (approvalsInsertError) throw new Error(approvalsInsertError);
       }
 
       // Capture item history snapshot for the resubmit
@@ -191,14 +193,18 @@ export default function RateContracts() {
           qty_before: lastByItem.get(item.id)?.qty_after ?? null,
           qty_after: item.expected_qty,
         }));
-        await supabase.from('rate_contract_item_history').insert(historyRows);
+        const historyInsert = await supabase.from('rate_contract_item_history').insert(historyRows).select('id');
+        const historyInsertError = getMutationError(historyInsert, 'RC negotiation history could not be captured for the resubmission.');
+        if (historyInsertError) throw new Error(historyInsertError);
       }
 
-      await supabase.from('rate_contract_timeline').insert({
+      const timelineInsert = await supabase.from('rate_contract_timeline').insert({
         rc_id: rc.id, actor_name: currentUser?.name || 'Admin', actor_role: 'Admin',
         action: 'Field rep accepted negotiated terms and resubmitted. Round 2 division review started.',
         action_type: 'resubmitted',
-      });
+      }).select('id');
+      const timelineInsertError = getMutationError(timelineInsert, 'RC timeline could not be updated after resubmission.');
+      if (timelineInsertError) throw new Error(timelineInsertError);
 
       addToast({ type: 'success', title: 'RC Resubmitted', message: `${rc.rc_code} is back in division review (Round 2).` });
       loadRCs();

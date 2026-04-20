@@ -187,7 +187,7 @@ export default function FinalApproval() {
       const itemUpdateError = getMutationError(itemUpdate, 'RC item changes could not be saved.');
       if (itemUpdateError) throw new Error(itemUpdateError);
 
-      await supabase.from('rate_contract_item_history').insert({
+      const historyInsert = await supabase.from('rate_contract_item_history').insert({
         rc_item_id: editingRCItem.id,
         rc_id: selectedRC.id,
         negotiation_round: selectedRC.negotiation_round || 1,
@@ -198,7 +198,9 @@ export default function FinalApproval() {
         price_after: editingRCItem.negotiated_price,
         qty_before: currentItem?.expected_qty ?? null,
         qty_after: editingRCItem.expected_qty,
-      });
+      }).select('id');
+      const historyInsertError = getMutationError(historyInsert, 'RC negotiation history could not be updated for this final review change.');
+      if (historyInsertError) throw new Error(historyInsertError);
 
       const timelineInsert = await supabase.from('rate_contract_timeline').insert({
         rc_id: selectedRC.id, actor_name: currentUser.name, actor_role: 'Final Approver',
