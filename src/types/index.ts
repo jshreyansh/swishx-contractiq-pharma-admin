@@ -189,6 +189,18 @@ export interface Product {
   unit_price: number;
   unit: string;
   status: string;
+  created_at?: string;
+  // Catalogue fields
+  brand_name: string | null;
+  drug_name: string | null;
+  strength: string | null;
+  packing: string | null;
+  mrp: number | null;
+  price_to_stockist: number | null;
+  price_to_hospital: number | null;
+  approval_threshold: string | null;
+  threshold_plus: number | null;
+  threshold_minus: number | null;
   division?: Division;
 }
 

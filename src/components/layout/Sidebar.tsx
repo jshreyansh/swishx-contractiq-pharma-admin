@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, ClipboardList, ScrollText, Truck, GitBranch,
-  CheckSquare, BarChart2, Settings, PanelLeftClose, PanelLeft, X,
+  CheckSquare, BarChart2, Settings, PanelLeftClose, PanelLeft, X, BookOpen,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 
@@ -9,6 +9,7 @@ const navItems = [
   { path: '/', label: 'Dashboard', icon: LayoutDashboard, roles: ['admin', 'viewer', 'final_approver', 'division_approver', 'cfa'] },
   { path: '/orders', label: 'Orders', icon: ClipboardList, roles: ['admin', 'viewer', 'final_approver', 'division_approver', 'cfa'] },
   { path: '/rate-contracts', label: 'Rate Contracts', icon: ScrollText, roles: ['admin', 'viewer', 'division_approver', 'final_approver'] },
+  { path: '/catalogue', label: 'Catalogue', icon: BookOpen, roles: ['admin', 'viewer', 'cfa', 'division_approver', 'final_approver'] },
   { path: '/cfa-queue', label: 'CFA Queue', icon: Truck, roles: ['admin', 'cfa'] },
   { path: '/division', label: 'Division Workspace', icon: GitBranch, roles: ['admin', 'division_approver'] },
   { path: '/final-approval', label: 'Final Approval', icon: CheckSquare, roles: ['admin', 'final_approver'] },

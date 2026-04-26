@@ -11,6 +11,7 @@ import RateContracts from './pages/RateContracts';
 import RateContractDetail from './pages/RateContractDetail';
 import Reports from './pages/Reports';
 import Config from './pages/Config';
+import Catalogue from './pages/Catalogue';
 
 export default function App() {
   return (
@@ -26,6 +27,7 @@ export default function App() {
             <Route path="/cfa-queue" element={<CFAQueue />} />
             <Route path="/division" element={<DivisionWorkspace />} />
             <Route path="/final-approval" element={<FinalApproval />} />
+            <Route path="/catalogue" element={<Catalogue />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/config" element={<Config />} />
             <Route path="*" element={<Navigate to="/" replace />} />
