@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, Filter, X, ArrowUpRight, AlertTriangle, PackageSearch } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { Order, OrderStage } from '../types';
+import { Division, Order, OrderStage } from '../types';
 import { formatINR, formatDateTime, getOrderPricingMode, orderPricingColor, orderPricingLabel, stageLabel, stageColor, erpStatusLabel, erpStatusColor } from '../utils/formatters';
 import { enrichOrdersWithLinkedRateContracts, hasRateContractSchemaError } from '../utils/orderRateContracts';
 import { formatSupabaseError, RATE_CONTRACTS_SCHEMA_WARNING } from '../utils/supabaseSchema';
@@ -19,13 +19,26 @@ const STAGES: OrderStage[] = [
   'final_approval_pending', 'final_approved', 'final_rejected', 'completed'
 ];
 
+type OrderListOrder = Order & {
+  order_items?: Array<{
+    division_id: string;
+    division?: Pick<Division, 'id' | 'name'>;
+  }>;
+};
+
 export default function OrdersList() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [orders, setOrders] = useState<Order[]>([]);
+  const [orders, setOrders] = useState<OrderListOrder[]>([]);
+  const [divisions, setDivisions] = useState<Division[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [stageFilter, setStageFilter] = useState(searchParams.get('stage') || '');
+  const [valueMin, setValueMin] = useState('');
+  const [valueMax, setValueMax] = useState('');
+  const [updatedFrom, setUpdatedFrom] = useState('');
+  const [updatedTo, setUpdatedTo] = useState('');
+  const [selectedDivisionIds, setSelectedDivisionIds] = useState<string[]>([]);
   const [showFilters, setShowFilters] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [rcSchemaUnavailable, setRcSchemaUnavailable] = useState(false);
@@ -40,17 +53,21 @@ export default function OrdersList() {
     setRcSchemaUnavailable(false);
 
     try {
-      const orderResponse = await supabase
-        .from('orders')
-        .select('*, hospital:hospitals(*), field_rep:field_reps(*), stockist:stockists(*), cfa_user:app_users!orders_cfa_user_id_fkey(*)')
-        .order('updated_at', { ascending: false });
+      const [orderResponse, divisionsResponse] = await Promise.all([
+        supabase
+          .from('orders')
+          .select('*, hospital:hospitals(*), field_rep:field_reps(*), stockist:stockists(*), cfa_user:app_users!orders_cfa_user_id_fkey(*), order_items(division_id, division:divisions(id, name))')
+          .order('updated_at', { ascending: false }),
+        supabase.from('divisions').select('*').order('name'),
+      ]);
 
-      if (orderResponse.error) {
-        throw orderResponse.error;
-      }
+      if (orderResponse.error) throw orderResponse.error;
+      if (divisionsResponse.error) throw divisionsResponse.error;
 
-      const orderData = (orderResponse.data || []) as Order[];
-      const linkedRateContracts = await enrichOrdersWithLinkedRateContracts(orderData);
+      setDivisions((divisionsResponse.data || []) as Division[]);
+
+      const orderData = (orderResponse.data || []) as OrderListOrder[];
+      const linkedRateContracts = await enrichOrdersWithLinkedRateContracts(orderData as Order[]);
 
       if (linkedRateContracts.error) {
         if (hasRateContractSchemaError(linkedRateContracts.error)) {
@@ -62,10 +79,11 @@ export default function OrdersList() {
         throw linkedRateContracts.error;
       }
 
-      setOrders(linkedRateContracts.orders);
+      setOrders(linkedRateContracts.orders as OrderListOrder[]);
       setRcSchemaUnavailable(false);
     } catch (error) {
       setOrders([]);
+      setDivisions([]);
       setLoadError(formatSupabaseError(error as { message?: string | null }, 'Orders could not be loaded.'));
     } finally {
       setLoading(false);
@@ -74,6 +92,12 @@ export default function OrdersList() {
 
   const filtered = orders.filter(o => {
     const q = search.toLowerCase();
+    const orderUpdatedAt = new Date(o.updated_at).getTime();
+    const minValue = valueMin ? parseFloat(valueMin) : null;
+    const maxValue = valueMax ? parseFloat(valueMax) : null;
+    const updatedFromMs = updatedFrom ? new Date(updatedFrom).getTime() : null;
+    const updatedToMs = updatedTo ? new Date(updatedTo).getTime() : null;
+    const orderDivisionIds = [...new Set((o.order_items || []).map(item => item.division_id).filter(Boolean))];
     const matchSearch = !q ||
       o.order_id.toLowerCase().includes(q) ||
       o.hospital?.name.toLowerCase().includes(q) ||
@@ -82,10 +106,37 @@ export default function OrdersList() {
       o.cfa_user?.name.toLowerCase().includes(q) ||
       o.linked_rate_contracts?.some(rc => rc.rc_code.toLowerCase().includes(q));
     const matchStage = !stageFilter || o.stage === stageFilter;
-    return matchSearch && matchStage;
+    const matchValue = (minValue == null || o.total_value >= minValue) && (maxValue == null || o.total_value <= maxValue);
+    const matchUpdated = (updatedFromMs == null || orderUpdatedAt >= updatedFromMs) && (updatedToMs == null || orderUpdatedAt <= updatedToMs);
+    const matchDivision = selectedDivisionIds.length === 0 || orderDivisionIds.some(divisionId => selectedDivisionIds.includes(divisionId));
+    return matchSearch && matchStage && matchValue && matchUpdated && matchDivision;
   });
 
-  const activeFilters = (search ? 1 : 0) + (stageFilter ? 1 : 0);
+  const activeFilters =
+    (search ? 1 : 0) +
+    (stageFilter ? 1 : 0) +
+    (valueMin || valueMax ? 1 : 0) +
+    (updatedFrom || updatedTo ? 1 : 0) +
+    (selectedDivisionIds.length > 0 ? 1 : 0);
+
+  function toggleDivision(divisionId: string) {
+    setSelectedDivisionIds(prev =>
+      prev.includes(divisionId)
+        ? prev.filter(id => id !== divisionId)
+        : [...prev, divisionId]
+    );
+  }
+
+  function clearFilters() {
+    setSearch('');
+    setStageFilter('');
+    setValueMin('');
+    setValueMax('');
+    setUpdatedFrom('');
+    setUpdatedTo('');
+    setSelectedDivisionIds([]);
+    setSearchParams({});
+  }
 
   return (
     <div className="space-y-5">
@@ -125,18 +176,18 @@ export default function OrdersList() {
           <button
             onClick={() => setShowFilters(!showFilters)}
             className={`flex items-center gap-1.5 px-3 py-2 text-sm border rounded-lg transition-all whitespace-nowrap ${
-              showFilters || stageFilter
+              showFilters || activeFilters > 0
                 ? 'bg-primary-50 border-primary-200 text-brand-orange'
                 : 'border-slate-200 text-ink-600 hover:bg-slate-50'
             }`}
           >
             <Filter size={13} />
             Filter
-            {stageFilter && <span className="w-1.5 h-1.5 bg-brand-orange rounded-full" />}
+            {activeFilters > 0 && <span className="w-1.5 h-1.5 bg-brand-orange rounded-full" />}
           </button>
           {activeFilters > 0 && (
             <button
-              onClick={() => { setSearch(''); setStageFilter(''); setSearchParams({}); }}
+              onClick={clearFilters}
               className="flex items-center gap-1 text-xs text-ink-400 hover:text-ink-700 px-2 py-2 rounded-lg hover:bg-slate-100 transition-colors whitespace-nowrap"
             >
               <X size={12} /> Clear
@@ -145,20 +196,95 @@ export default function OrdersList() {
         </div>
 
         {showFilters && (
-          <div className="px-4 py-3 border-b border-slate-100 flex gap-4 flex-wrap bg-slate-50/50">
+          <div className="px-4 py-3 border-b border-slate-100 space-y-4 bg-slate-50/50">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+              <div>
+                <label htmlFor="stage-filter" className="text-[11px] font-semibold text-ink-500 block mb-1 uppercase tracking-wide">
+                  Stage
+                </label>
+                <select
+                  id="stage-filter"
+                  value={stageFilter}
+                  onChange={e => { setStageFilter(e.target.value); setSearchParams(e.target.value ? { stage: e.target.value } : {}); }}
+                  className="w-full text-sm border border-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-brand-orange/20 bg-white text-ink-900 transition-colors"
+                >
+                  <option value="">All Stages</option>
+                  {STAGES.map(s => <option key={s} value={s}>{stageLabel(s)}</option>)}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-ink-500 block mb-1 uppercase tracking-wide">
+                  Value Range
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    value={valueMin}
+                    onChange={e => setValueMin(e.target.value)}
+                    placeholder="Min ₹"
+                    className="w-full text-sm border border-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-brand-orange/20 bg-white text-ink-900"
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    value={valueMax}
+                    onChange={e => setValueMax(e.target.value)}
+                    placeholder="Max ₹"
+                    className="w-full text-sm border border-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-brand-orange/20 bg-white text-ink-900"
+                  />
+                </div>
+              </div>
+
+              <div className="xl:col-span-2">
+                <label className="text-[11px] font-semibold text-ink-500 block mb-1 uppercase tracking-wide">
+                  Date Time Range
+                </label>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  <input
+                    type="datetime-local"
+                    value={updatedFrom}
+                    onChange={e => setUpdatedFrom(e.target.value)}
+                    className="w-full text-sm border border-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-brand-orange/20 bg-white text-ink-900"
+                  />
+                  <input
+                    type="datetime-local"
+                    value={updatedTo}
+                    onChange={e => setUpdatedTo(e.target.value)}
+                    className="w-full text-sm border border-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-brand-orange/20 bg-white text-ink-900"
+                  />
+                </div>
+              </div>
+            </div>
+
             <div>
-              <label htmlFor="stage-filter" className="text-[11px] font-semibold text-ink-500 block mb-1 uppercase tracking-wide">
-                Stage
-              </label>
-              <select
-                id="stage-filter"
-                value={stageFilter}
-                onChange={e => { setStageFilter(e.target.value); setSearchParams(e.target.value ? { stage: e.target.value } : {}); }}
-                className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-brand-orange/20 bg-white text-ink-900 transition-colors"
-              >
-                <option value="">All Stages</option>
-                {STAGES.map(s => <option key={s} value={s}>{stageLabel(s)}</option>)}
-              </select>
+              <div className="flex items-center justify-between gap-3 mb-2">
+                <label className="text-[11px] font-semibold text-ink-500 uppercase tracking-wide">
+                  Divisions
+                </label>
+                <span className="text-[11px] text-ink-400">
+                  {selectedDivisionIds.length > 0 ? `${selectedDivisionIds.length} selected` : 'Select one or more'}
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {divisions.map(division => {
+                  const isSelected = selectedDivisionIds.includes(division.id);
+                  return (
+                    <button
+                      key={division.id}
+                      onClick={() => toggleDivision(division.id)}
+                      className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
+                        isSelected
+                          ? 'border-brand-orange bg-primary-50 text-brand-orange'
+                          : 'border-slate-200 bg-white text-ink-600 hover:border-slate-300'
+                      }`}
+                    >
+                      {division.name}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
         )}
@@ -189,7 +315,7 @@ export default function OrdersList() {
             description={activeFilters > 0 ? 'Try adjusting your search or filter' : 'No orders have been created yet'}
             action={activeFilters > 0 ? (
               <button
-                onClick={() => { setSearch(''); setStageFilter(''); setSearchParams({}); }}
+                onClick={clearFilters}
                 className="text-sm text-brand-orange font-medium underline underline-offset-2"
               >
                 Clear filters

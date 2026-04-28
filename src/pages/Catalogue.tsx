@@ -19,9 +19,6 @@ interface ProductForm {
   packing: string;
   mrp: string;
   price_to_stockist: string;
-  price_to_hospital: string;
-  threshold_plus: string;
-  threshold_minus: string;
   division_id: string;
   sku: string;
 }
@@ -33,9 +30,6 @@ const emptyForm = (): ProductForm => ({
   packing: '',
   mrp: '',
   price_to_stockist: '',
-  price_to_hospital: '',
-  threshold_plus: '10',
-  threshold_minus: '5',
   division_id: '',
   sku: '',
 });
@@ -95,26 +89,6 @@ function Field({
             <span className="absolute right-3 text-sm text-slate-400 pointer-events-none select-none">{suffix}</span>
           )}
         </div>
-      )}
-    </div>
-  );
-}
-
-// ── Threshold display helper ───────────────────────────────────────────────────
-
-function ThresholdBadge({ plus, minus }: { plus: number | null; minus: number | null }) {
-  if (plus == null && minus == null) return <span className="text-xs text-ink-300">—</span>;
-  return (
-    <div className="flex items-center justify-center gap-1">
-      {plus != null && (
-        <span className="inline-block px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 text-[11px] font-semibold">
-          +{plus}%
-        </span>
-      )}
-      {minus != null && (
-        <span className="inline-block px-1.5 py-0.5 rounded bg-red-50 text-red-600 text-[11px] font-semibold">
-          -{minus}%
-        </span>
       )}
     </div>
   );
@@ -195,9 +169,6 @@ export default function Catalogue() {
       packing: product.packing || product.unit || '',
       mrp: product.mrp != null ? String(product.mrp) : '',
       price_to_stockist: product.price_to_stockist != null ? String(product.price_to_stockist) : '',
-      price_to_hospital: product.price_to_hospital != null ? String(product.price_to_hospital) : '',
-      threshold_plus: product.threshold_plus != null ? String(product.threshold_plus) : '10',
-      threshold_minus: product.threshold_minus != null ? String(product.threshold_minus) : '5',
       division_id: product.division_id || '',
       sku: product.sku || '',
     });
@@ -213,9 +184,7 @@ export default function Catalogue() {
         packing: editForm.packing || null,
         mrp: editForm.mrp ? parseFloat(editForm.mrp) : null,
         price_to_stockist: editForm.price_to_stockist ? parseFloat(editForm.price_to_stockist) : null,
-        price_to_hospital: editForm.price_to_hospital ? parseFloat(editForm.price_to_hospital) : null,
-        threshold_plus: editForm.threshold_plus ? parseFloat(editForm.threshold_plus) : null,
-        threshold_minus: editForm.threshold_minus ? parseFloat(editForm.threshold_minus) : null,
+        unit_price: editForm.price_to_stockist ? parseFloat(editForm.price_to_stockist) : 0,
       }).eq('id', editTarget.id);
       if (error) throw error;
       addToast({ type: 'success', title: 'Product Updated', message: `${editForm.brand_name || editForm.drug_name} saved.` });
@@ -254,7 +223,7 @@ export default function Catalogue() {
         name: addForm.drug_name.trim(),
         sku: addForm.sku.trim().toUpperCase(),
         division_id: addForm.division_id,
-        unit_price: addForm.price_to_hospital ? parseFloat(addForm.price_to_hospital) : 0,
+        unit_price: addForm.price_to_stockist ? parseFloat(addForm.price_to_stockist) : 0,
         unit: addForm.packing || 'Unit',
         status: 'active',
         brand_name: addForm.brand_name || null,
@@ -263,9 +232,6 @@ export default function Catalogue() {
         packing: addForm.packing || null,
         mrp: addForm.mrp ? parseFloat(addForm.mrp) : null,
         price_to_stockist: addForm.price_to_stockist ? parseFloat(addForm.price_to_stockist) : null,
-        price_to_hospital: addForm.price_to_hospital ? parseFloat(addForm.price_to_hospital) : null,
-        threshold_plus: addForm.threshold_plus ? parseFloat(addForm.threshold_plus) : null,
-        threshold_minus: addForm.threshold_minus ? parseFloat(addForm.threshold_minus) : null,
       });
       if (error) throw error;
       addToast({ type: 'success', title: 'Medicine Added', message: `${addForm.brand_name || addForm.drug_name} added to catalogue.` });
@@ -324,7 +290,7 @@ export default function Catalogue() {
           />
         </div>
 
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 gap-4">
           <Field
             label="MRP (₹)"
             value={form.mrp}
@@ -339,55 +305,6 @@ export default function Catalogue() {
             placeholder="30"
             prefix="₹"
           />
-          <Field
-            label="Price to Hospital (₹)"
-            value={form.price_to_hospital}
-            onChange={v => setForm(f => ({ ...f, price_to_hospital: v }))}
-            placeholder="40"
-            prefix="₹"
-          />
-        </div>
-
-        {/* Approval Threshold — two inputs */}
-        <div>
-          <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">
-            Approval Threshold
-          </label>
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1.5 flex-1 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
-              <span className="text-emerald-600 text-sm font-bold select-none">+</span>
-              <input
-                type="number"
-                min="0"
-                max="100"
-                step="0.5"
-                value={form.threshold_plus}
-                onChange={e => setForm(f => ({ ...f, threshold_plus: e.target.value }))}
-                placeholder="10"
-                className="w-full text-sm bg-transparent focus:outline-none text-emerald-800 font-semibold placeholder:text-emerald-300"
-              />
-              <span className="text-emerald-600 text-sm select-none">%</span>
-            </div>
-            <span className="text-ink-400 text-xs font-medium">upper</span>
-            <div className="flex items-center gap-1.5 flex-1 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-              <span className="text-red-500 text-sm font-bold select-none">−</span>
-              <input
-                type="number"
-                min="0"
-                max="100"
-                step="0.5"
-                value={form.threshold_minus}
-                onChange={e => setForm(f => ({ ...f, threshold_minus: e.target.value }))}
-                placeholder="5"
-                className="w-full text-sm bg-transparent focus:outline-none text-red-700 font-semibold placeholder:text-red-300"
-              />
-              <span className="text-red-500 text-sm select-none">%</span>
-            </div>
-            <span className="text-ink-400 text-xs font-medium">lower</span>
-          </div>
-          <p className="text-[11px] text-ink-400 mt-1.5">
-            Price can be negotiated up to <span className="text-emerald-600 font-semibold">+{form.threshold_plus || 0}%</span> above and <span className="text-red-500 font-semibold">−{form.threshold_minus || 0}%</span> below hospital price.
-          </p>
         </div>
 
         {showDivisionSku && (
@@ -477,7 +394,7 @@ export default function Catalogue() {
         {/* Table */}
         {loading ? (
           <div className="overflow-x-auto">
-            <SkeletonTable rows={8} cols={9} />
+            <SkeletonTable rows={8} cols={7} />
           </div>
         ) : loadError ? (
           <EmptyState
@@ -499,7 +416,7 @@ export default function Catalogue() {
           />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm" style={{ minWidth: '1060px' }}>
+            <table className="w-full text-sm" style={{ minWidth: '900px' }}>
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-100">
                   <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider whitespace-nowrap">Product</th>
@@ -508,8 +425,6 @@ export default function Catalogue() {
                   <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider whitespace-nowrap">Packing</th>
                   <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-ink-400 uppercase tracking-wider whitespace-nowrap">MRP</th>
                   <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-ink-400 uppercase tracking-wider whitespace-nowrap">Price to Stockist</th>
-                  <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-ink-400 uppercase tracking-wider whitespace-nowrap">Price to Hospital</th>
-                  <th className="px-4 py-2.5 text-center text-[11px] font-semibold text-ink-400 uppercase tracking-wider whitespace-nowrap">Approval Threshold</th>
                   {isAdmin && <th className="w-16" />}
                 </tr>
               </thead>
@@ -545,14 +460,6 @@ export default function Catalogue() {
                       <span className="text-xs text-ink-700 tabular-nums">
                         {product.price_to_stockist != null && product.price_to_stockist > 0 ? formatINR(product.price_to_stockist) : <span className="text-ink-300">—</span>}
                       </span>
-                    </td>
-                    <td className="px-4 py-3 text-right whitespace-nowrap">
-                      <span className="text-xs text-ink-700 tabular-nums">
-                        {product.price_to_hospital != null && product.price_to_hospital > 0 ? formatINR(product.price_to_hospital) : <span className="text-ink-300">—</span>}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <ThresholdBadge plus={product.threshold_plus} minus={product.threshold_minus} />
                     </td>
                     {isAdmin && (
                       <td className="px-3 py-3 text-right">
