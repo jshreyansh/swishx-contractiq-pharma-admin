@@ -2,7 +2,25 @@ import { supabase } from '../lib/supabase';
 import { OrderStage } from '../types';
 import { getMutationError } from './supabaseWrites';
 
+async function isRateContractOrder(orderId: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('orders')
+    .select('rc_id, pricing_mode')
+    .eq('id', orderId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message || 'Order routing details could not be loaded.');
+  }
+
+  return Boolean(data?.rc_id) || data?.pricing_mode === 'RC';
+}
+
 export async function ensureDivisionApprovalsForOrder(orderId: string): Promise<string[]> {
+  if (await isRateContractOrder(orderId)) {
+    return [];
+  }
+
   const { data: orderItems, error: itemsError } = await supabase
     .from('order_items')
     .select('division_id')
@@ -129,7 +147,7 @@ export async function ensureFinalApprovalsForOrder(orderId: string): Promise<voi
 
 export function getStageFromDivisionApprovalStatuses(statuses: Array<'pending' | 'approved' | 'rejected'>): OrderStage {
   if (!statuses.length || statuses.every(status => status === 'pending')) return 'division_processing';
-  if (statuses.every(status => status === 'approved')) return 'final_approval_pending';
+  if (statuses.every(status => status === 'approved')) return 'pending_erp_entry';
   if (statuses.some(status => status === 'rejected')) return 'division_partially_rejected';
   return 'division_partially_approved';
 }
@@ -146,10 +164,6 @@ export async function syncOrderStageAfterDivisionDecision(orderId: string): Prom
 
   const statuses = (approvals || []).map(approval => approval.status as 'pending' | 'approved' | 'rejected');
   const nextStage = getStageFromDivisionApprovalStatuses(statuses);
-
-  if (nextStage === 'final_approval_pending') {
-    await ensureFinalApprovalsForOrder(orderId);
-  }
 
   const orderUpdate = await supabase
     .from('orders')

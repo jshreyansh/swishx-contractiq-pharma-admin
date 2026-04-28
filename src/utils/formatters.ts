@@ -29,23 +29,23 @@ export function timeAgo(dateStr: string | null): string {
 export function stageLabel(stage: OrderStage): string {
   const map: Record<OrderStage, string> = {
     created: 'Created',
-    hospital_confirmed: 'Hospital Confirmed',
-    pending_manager_approval: 'Pending Manager Approval',
-    manager_approved: 'Manager Approved',
-    pending_erp_entry: 'Pending ERP Entry',
-    erp_entered: 'ERP Entered',
-    erp_sync_failed: 'ERP Sync Failed',
-    division_processing: 'Division Processing',
-    division_partially_approved: 'Division Partially Approved',
-    division_partially_rejected: 'Division Partially Rejected',
+    hospital_confirmed: 'Hospital Reconfirmed',
+    pending_manager_approval: 'Created',
+    manager_approved: 'Created',
+    pending_erp_entry: 'CFA / CNF Processing',
+    erp_entered: 'CFA / CNF Processed',
+    erp_sync_failed: 'Processing Exception',
+    division_processing: 'Division Review',
+    division_partially_approved: 'Division Review',
+    division_partially_rejected: 'Division Rejected',
     final_approval_pending: 'Final Approval Pending',
-    final_approved: 'Final Approved',
-    final_rejected: 'Final Rejected',
-    erp_sync_done: 'Final ERP Sync Done',
-    sent_to_supply_chain: 'Sent to Supply Chain',
-    sent_to_stockist: 'Sent to Stockist',
-    fulfillment_pending: 'Fulfillment Pending',
-    completed: 'Completed',
+    final_approved: 'Approved',
+    final_rejected: 'Rejected',
+    erp_sync_done: 'Approved',
+    sent_to_supply_chain: 'Approved',
+    sent_to_stockist: 'Approved',
+    fulfillment_pending: 'Approved',
+    completed: 'Closed',
   };
   return map[stage] || stage;
 }
@@ -55,12 +55,12 @@ export function stageColor(stage: OrderStage): string {
   const map: Record<OrderStage, string> = {
     created:                      'bg-slate-100 text-slate-500',
     hospital_confirmed:           'bg-slate-100 text-slate-500',
-    pending_manager_approval:     'bg-orange-50 text-orange-600',
-    manager_approved:             'bg-orange-50 text-orange-600',
+    pending_manager_approval:     'bg-slate-100 text-slate-500',
+    manager_approved:             'bg-slate-100 text-slate-500',
     pending_erp_entry:            'bg-orange-50 text-orange-600',
     erp_entered:                  'bg-blue-50 text-blue-600',
     erp_sync_failed:              'bg-red-50 text-red-600',
-    erp_sync_done:                'bg-blue-50 text-blue-600',
+    erp_sync_done:                'bg-emerald-50 text-emerald-700',
     division_processing:          'bg-blue-50 text-blue-600',
     division_partially_approved:  'bg-blue-50 text-blue-600',
     division_partially_rejected:  'bg-red-50 text-red-600',
@@ -77,11 +77,11 @@ export function stageColor(stage: OrderStage): string {
 
 export function erpStatusLabel(status: ERPStatus): string {
   const map: Record<ERPStatus, string> = {
-    pending_sync: 'Pending Sync',
-    synced: 'Synced',
-    manual_added: 'Manual Added',
-    sync_failed: 'Sync Failed',
-    resync_required: 'Re-sync Required',
+    pending_sync: 'Pending Processing',
+    synced: 'Processed',
+    manual_added: 'Exception Order',
+    sync_failed: 'Processing Exception',
+    resync_required: 'Rework Required',
   };
   return map[status] || status;
 }

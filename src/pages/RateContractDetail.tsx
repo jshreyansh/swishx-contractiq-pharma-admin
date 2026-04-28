@@ -13,6 +13,8 @@ import {
 } from '../utils/formatters';
 import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
+import NotesDocumentsPanel from '../components/ui/NotesDocumentsPanel';
+import { getDemoRateContractDocuments } from '../utils/demoDocuments';
 
 interface RCWithStats extends RateContract {
   items: RateContractItem[];
@@ -271,6 +273,8 @@ export default function RateContractDetail() {
     contextMessage = 'This RC is no longer valid for new orders, though earlier linked orders remain part of its history.';
   }
 
+  const rcDocuments = getDemoRateContractDocuments(rc.rc_code);
+
   return (
     <div className="space-y-5 max-w-6xl mx-auto">
       <button
@@ -368,6 +372,11 @@ export default function RateContractDetail() {
           <p className={`text-xs mt-0.5 ${contextTextClass}`}>{contextMessage}</p>
         </div>
       </div>
+
+      <NotesDocumentsPanel
+        notes={rc.notes}
+        documents={rcDocuments}
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2 space-y-5">
@@ -609,13 +618,6 @@ export default function RateContractDetail() {
                 />
               </div>
             </div>
-
-            {rc.notes && (
-              <div className="mt-4 pt-4 border-t border-slate-100">
-                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Notes</p>
-                <p className="text-sm text-slate-600 leading-relaxed">{rc.notes}</p>
-              </div>
-            )}
           </Card>
 
           <Card>

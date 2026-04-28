@@ -113,9 +113,9 @@ export default function CreateOrderModal({ hospitals, stockists, reps, divisions
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 flex-shrink-0">
           <div>
-            <h3 className="text-base font-bold text-slate-900">Create Manual Order</h3>
+            <h3 className="text-base font-bold text-slate-900">Create Exception Order</h3>
             <p className="text-xs text-slate-400 mt-0.5">
-              {prefill ? 'Pre-filled from failed ERP sync. Add products to complete.' : 'Fill order details and add product line items'}
+              {prefill ? 'Pre-filled from a CFA / CNF exception. Add products to complete.' : 'Fill order details and add product line items'}
             </p>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 transition-colors">
@@ -154,7 +154,7 @@ export default function CreateOrderModal({ hospitals, stockists, reps, divisions
           <div>
             <label className="text-xs font-medium text-slate-500 block mb-1">Notes</label>
             <textarea value={notes} onChange={e => setNotes(e.target.value)}
-              placeholder="Reason for manual entry..."
+              placeholder="Reason for exception order..."
               className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/20 resize-none" rows={2} />
           </div>
 
@@ -310,7 +310,7 @@ export default function CreateOrderModal({ hospitals, stockists, reps, divisions
             disabled={!isValid || submitting}
             className="flex-1 py-2 text-sm bg-sky-600 text-white rounded-lg hover:bg-sky-700 font-medium disabled:opacity-50 transition-colors"
           >
-            {submitting ? 'Creating...' : `Create Order${lineItems.length > 0 ? ` (${lineItems.length} item${lineItems.length > 1 ? 's' : ''})` : ''}`}
+            {submitting ? 'Creating...' : `Create Exception Order${lineItems.length > 0 ? ` (${lineItems.length} item${lineItems.length > 1 ? 's' : ''})` : ''}`}
           </button>
         </div>
       </div>

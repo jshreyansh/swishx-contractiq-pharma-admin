@@ -2,19 +2,21 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Building2, User, Package, Clock, CheckCircle, XCircle,
-  AlertTriangle, ChevronDown, ChevronUp, Truck, GitBranch, Database, Mail, Phone,
+  AlertTriangle, ChevronDown, ChevronUp, Truck, GitBranch, Mail, Phone,
   ScrollText, ArrowUpRight,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { Order, OrderItem, DivisionApproval, FinalApproval, OrderTimeline } from '../types';
 import { formatINR, formatDate, formatDateTime, getOrderPricingMode, orderPricingColor, orderPricingLabel, stageLabel, stageColor, erpStatusLabel, erpStatusColor, timeAgo, rcStatusColor } from '../utils/formatters';
 import { enrichOrdersWithLinkedRateContracts, hasRateContractSchemaError } from '../utils/orderRateContracts';
-import { ensureDivisionApprovalsForOrder, syncOrderStageAfterDivisionDecision } from '../utils/orderWorkflow';
+import { ensureFinalApprovalsForOrder, syncOrderStageAfterDivisionDecision } from '../utils/orderWorkflow';
 import { getMutationError } from '../utils/supabaseWrites';
 import { useApp } from '../context/AppContext';
 import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
+import NotesDocumentsPanel from '../components/ui/NotesDocumentsPanel';
+import { getDemoOrderDocuments } from '../utils/demoDocuments';
 
 export default function OrderDetail() {
   const { id } = useParams<{ id: string }>();
@@ -60,61 +62,33 @@ export default function OrderDetail() {
 
   async function handleERPSync() {
     if (!order || !currentUser) return;
-    const erpId = `ERP-${Math.floor(Math.random() * 900000 + 100000)}`;
+    const erpId = `CFA-${Math.floor(Math.random() * 900000 + 100000)}`;
     try {
-      await ensureDivisionApprovalsForOrder(order.id);
+      await ensureFinalApprovalsForOrder(order.id);
 
       const orderUpdate = await supabase.from('orders').update({
         erp_status: 'synced', erp_order_id: erpId,
-        erp_synced_at: new Date().toISOString(), stage: 'division_processing',
+        erp_synced_at: new Date().toISOString(), stage: 'final_approval_pending',
         updated_at: new Date().toISOString(),
       }).eq('id', order.id).select('id');
-      const orderUpdateError = getMutationError(orderUpdate, 'ERP sync could not be saved for this order.');
+      const orderUpdateError = getMutationError(orderUpdate, 'The CFA / CNF processing update could not be saved for this order.');
       if (orderUpdateError) throw new Error(orderUpdateError);
 
       const timelineInsert = await supabase.from('order_timeline').insert({
-        order_id: order.id, actor_name: currentUser.name, actor_role: 'CFA',
-        action: `ERP entry completed. ERP ID: ${erpId}. Sent to Division Workspace.`,
+        order_id: order.id, actor_name: currentUser.name, actor_role: 'CFA / CNF',
+        action: `CFA / CNF processing completed. Reference ${erpId}. Sent to final approval.`,
         action_type: 'erp_synced',
       }).select('id');
-      const timelineInsertError = getMutationError(timelineInsert, 'Order history could not be updated after ERP sync.');
+      const timelineInsertError = getMutationError(timelineInsert, 'Order history could not be updated after CFA / CNF processing.');
       if (timelineInsertError) throw new Error(timelineInsertError);
 
-      addToast({ type: 'success', title: 'ERP Synced', message: `Order moved to Division Workspace.` });
+      addToast({ type: 'success', title: 'Processing Completed', message: 'Order moved to final approval.' });
       loadOrder();
     } catch (error) {
       addToast({
         type: 'error',
-        title: 'ERP Sync Failed',
-        message: error instanceof Error ? error.message : 'ERP sync could not be completed.',
-      });
-    }
-  }
-
-  async function handleFinalERPSync() {
-    if (!order || !currentUser) return;
-    try {
-      const orderUpdate = await supabase.from('orders').update({
-        stage: 'erp_sync_done', erp_status: 'synced',
-        erp_synced_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-      }).eq('id', order.id).select('id');
-      const orderUpdateError = getMutationError(orderUpdate, 'The ERP sync confirmation could not be saved.');
-      if (orderUpdateError) throw new Error(orderUpdateError);
-
-      const timelineInsert = await supabase.from('order_timeline').insert({
-        order_id: order.id, actor_name: currentUser.name, actor_role: 'Final Approver',
-        action: 'Final ERP sync confirmed. Order marked as ERP Sync Done.', action_type: 'erp_sync_done',
-      }).select('id');
-      const timelineInsertError = getMutationError(timelineInsert, 'Order history could not be updated after ERP sync.');
-      if (timelineInsertError) throw new Error(timelineInsertError);
-
-      addToast({ type: 'success', title: 'Final ERP Sync Done', message: `Order ${order.order_id} synced to ERP.` });
-      loadOrder();
-    } catch (error) {
-      addToast({
-        type: 'error',
-        title: 'ERP Sync Failed',
-        message: error instanceof Error ? error.message : 'Final ERP sync could not be completed.',
+        title: 'Processing Failed',
+        message: error instanceof Error ? error.message : 'The CFA / CNF processing update could not be completed.',
       });
     }
   }
@@ -224,15 +198,7 @@ export default function OrderDetail() {
         const timelineInsertError = getMutationError(timelineInsert, 'Order history could not be updated after final approval.');
         if (timelineInsertError) throw new Error(timelineInsertError);
 
-        const notificationsInsert = await supabase.from('notifications_log').insert({
-          order_id: order.id, notification_type: 'supply_chain_email',
-          recipient_email: 'supplychain@swishx.com', recipient_name: 'Supply Chain Team',
-          subject: `Order ${order.order_id} Final Approved - Dispatch Ready`, status: 'sent',
-        }).select('id');
-        const notificationsInsertError = getMutationError(notificationsInsert, 'Notification history could not be recorded.');
-        if (notificationsInsertError) throw new Error(notificationsInsertError);
-
-        addToast({ type: 'success', title: 'Final Approved!', message: 'Order finalized. Supply chain email triggered.' });
+        addToast({ type: 'success', title: 'Final Approved', message: 'The order is now approved and locked.' });
       } else {
         const timelineInsert = await supabase.from('order_timeline').insert({
           order_id: order.id, actor_name: currentUser.name, actor_role: 'Final Approver',
@@ -241,7 +207,7 @@ export default function OrderDetail() {
         const timelineInsertError = getMutationError(timelineInsert, 'Order history could not be updated after approval.');
         if (timelineInsertError) throw new Error(timelineInsertError);
 
-        addToast({ type: 'info', title: 'Approval Recorded', message: 'Awaiting other final approvers.' });
+        addToast({ type: 'info', title: 'Approval Recorded', message: 'Awaiting the remaining final approver.' });
       }
 
       setApproveModal(false);
@@ -304,10 +270,8 @@ export default function OrderDetail() {
     myFinalApproval?.status === 'pending';
 
   const canERPAct = currentRole === 'cfa' &&
-    ['pending_erp_entry', 'manager_approved'].includes(order?.stage || '') &&
-    order?.erp_status === 'pending_sync';
-
-  const canFinalERPSync = currentRole === 'final_approver' && order?.stage === 'final_approved';
+    order?.stage === 'pending_erp_entry' &&
+    ['pending_sync', 'manual_added', 'resync_required'].includes(order?.erp_status || '');
 
   const statusBadge = (status: string) => {
     if (status === 'approved') return 'bg-emerald-100 text-emerald-800';
@@ -351,6 +315,8 @@ export default function OrderDetail() {
   const fieldRepName = order.field_rep?.name?.trim() || 'Unavailable';
   const fieldRepEmail = order.field_rep?.email?.trim() || 'Unavailable';
   const fieldRepPhone = order.field_rep?.phone?.trim() || 'Unavailable';
+  const creatorName = order.manager_name?.trim() || fieldRepName;
+  const orderDocuments = getDemoOrderDocuments(order.order_id);
 
   return (
     <div className="space-y-5 max-w-6xl mx-auto">
@@ -407,7 +373,7 @@ export default function OrderDetail() {
                 <Phone size={11} className="text-slate-400" />
                 <span>{fieldRepPhone}</span>
               </p>
-              <p>Mgr: {order.manager_name || 'Unavailable'}</p>
+              <p>Creator: {creatorName}</p>
             </div>
           </div>
           <div>
@@ -423,7 +389,7 @@ export default function OrderDetail() {
             </p>
             <p className="text-sm font-semibold text-slate-800">{order.cfa_user?.name || '—'}</p>
             {order.erp_order_id && (
-              <p className="text-xs text-slate-500 mt-0.5 font-mono">ERP: {order.erp_order_id}</p>
+              <p className="text-xs text-slate-500 mt-0.5 font-mono">Ref: {order.erp_order_id}</p>
             )}
           </div>
         </div>
@@ -484,6 +450,11 @@ export default function OrderDetail() {
           <p className="text-xs text-slate-500">This is a manual order with hospital-specific pricing entered during order creation.</p>
         </div>
       )}
+
+      <NotesDocumentsPanel
+        notes={order.notes}
+        documents={orderDocuments}
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2 space-y-5">
@@ -594,7 +565,7 @@ export default function OrderDetail() {
 
         <div className="space-y-5">
           <Card className="p-4">
-            <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">ERP Sync</h2>
+            <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">CFA / CNF Processing</h2>
             <div className="space-y-2.5 text-sm">
               <div className="flex justify-between items-center">
                 <span className="text-slate-500 text-xs">Status</span>
@@ -602,13 +573,13 @@ export default function OrderDetail() {
               </div>
               {order.erp_order_id && (
                 <div className="flex justify-between items-center">
-                  <span className="text-slate-500 text-xs">ERP ID</span>
+                  <span className="text-slate-500 text-xs">Reference</span>
                   <span className="font-mono text-slate-800 text-xs bg-slate-100 px-2 py-0.5 rounded">{order.erp_order_id}</span>
                 </div>
               )}
               {order.erp_synced_at && (
                 <div className="flex justify-between items-center">
-                  <span className="text-slate-500 text-xs">Synced at</span>
+                  <span className="text-slate-500 text-xs">Processed at</span>
                   <span className="text-slate-700 text-xs">{formatDateTime(order.erp_synced_at)}</span>
                 </div>
               )}
@@ -618,22 +589,8 @@ export default function OrderDetail() {
                 onClick={handleERPSync}
                 className="mt-4 w-full bg-amber-500 hover:bg-amber-600 text-white text-sm font-semibold py-2.5 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2"
               >
-                Mark as ERP Punched
+                Complete CFA / CNF Processing
               </button>
-            )}
-            {canFinalERPSync && (
-              <button
-                onClick={handleFinalERPSync}
-                className="mt-4 w-full bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold py-2.5 rounded-lg transition-colors flex items-center justify-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
-              >
-                <Database size={13} /> Mark as Final ERP Sync Done
-              </button>
-            )}
-            {order.stage === 'erp_sync_done' && (
-              <div className="mt-4 flex items-center gap-2 text-teal-700 bg-teal-50 border border-teal-200 rounded-lg px-3 py-2.5">
-                <Database size={13} />
-                <p className="text-xs font-semibold">Final ERP Sync Done</p>
-              </div>
             )}
           </Card>
 
@@ -782,7 +739,7 @@ export default function OrderDetail() {
           <textarea
             value={rejectReason}
             onChange={e => setRejectReason(e.target.value)}
-            placeholder="e.g., Wrong pricing, Product not allowed, ERP mismatch..."
+            placeholder="e.g., Wrong pricing, Product not allowed, commercial mismatch..."
             className="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-500/20 focus:border-red-400 resize-none transition-colors"
             rows={3}
             autoFocus

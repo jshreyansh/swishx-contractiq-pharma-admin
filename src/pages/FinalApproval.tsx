@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   CheckCircle, XCircle, Save, X, ArrowUpRight,
-  Package, Database, ChevronRight, Pencil, ScrollText, Lock,
+  Package, ChevronRight, Pencil, ScrollText, Lock,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { Order, OrderItem, FinalApproval as FinalApprovalType, RateContract, RateContractItem, RateContractApproval } from '../types';
@@ -228,7 +228,7 @@ export default function FinalApproval() {
     const { data } = await supabase
       .from('orders')
       .select('*, hospital:hospitals(*), field_rep:field_reps(*), stockist:stockists(*)')
-      .in('stage', ['final_approval_pending', 'final_approved', 'erp_sync_done', 'final_rejected', 'sent_to_supply_chain', 'sent_to_stockist', 'completed'])
+      .in('stage', ['final_approval_pending', 'final_approved', 'final_rejected', 'completed'])
       .order('updated_at', { ascending: false });
 
     if (!data?.length) {
@@ -300,14 +300,7 @@ export default function FinalApproval() {
         const timelineInsertError = getMutationError(timelineInsert, 'Order history could not be updated after final approval.');
         if (timelineInsertError) throw new Error(timelineInsertError);
 
-        const notificationsInsert = await supabase.from('notifications_log').insert([
-          { order_id: selected.id, notification_type: 'supply_chain_email', recipient_email: 'supplychain@swishx.com', recipient_name: 'Supply Chain Team', subject: `Order ${selected.order_id} Final Approved`, status: 'sent' },
-          { order_id: selected.id, notification_type: 'supply_chain_email', recipient_email: 'warehouse@swishx.com', recipient_name: 'Warehouse Team', subject: `Order ${selected.order_id} Final Approved`, status: 'sent' },
-        ]).select('id');
-        const notificationsInsertError = getMutationError(notificationsInsert, 'Notification history could not be recorded.');
-        if (notificationsInsertError) throw new Error(notificationsInsertError);
-
-        addToast({ type: 'success', title: 'Order Final Approved!', message: 'Supply chain notified.' });
+        addToast({ type: 'success', title: 'Order Approved', message: 'The order is now approved and locked.' });
       } else {
         const timelineInsert = await supabase.from('order_timeline').insert({
           order_id: selected.id, actor_name: currentUser.name, actor_role: 'Final Approver',
@@ -316,7 +309,7 @@ export default function FinalApproval() {
         const timelineInsertError = getMutationError(timelineInsert, 'Order history could not be updated after approval.');
         if (timelineInsertError) throw new Error(timelineInsertError);
 
-        addToast({ type: 'info', title: 'Approval Recorded', message: 'Awaiting other final approvers.' });
+        addToast({ type: 'info', title: 'Approval Recorded', message: 'Awaiting the remaining final approver.' });
       }
 
       loadOrders();
@@ -362,35 +355,6 @@ export default function FinalApproval() {
         type: 'error',
         title: 'Rejection Failed',
         message: error instanceof Error ? error.message : 'The final rejection could not be completed.',
-      });
-    }
-  }
-
-  async function handleERPFinalSync() {
-    if (!selected || !currentUser) return;
-    try {
-      const orderUpdate = await supabase.from('orders').update({
-        stage: 'erp_sync_done', erp_status: 'synced',
-        erp_synced_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-      }).eq('id', selected.id).select('id');
-      const orderUpdateError = getMutationError(orderUpdate, 'The ERP sync confirmation could not be saved.');
-      if (orderUpdateError) throw new Error(orderUpdateError);
-
-      const timelineInsert = await supabase.from('order_timeline').insert({
-        order_id: selected.id, actor_name: currentUser.name, actor_role: 'Final Approver',
-        action: 'Final ERP sync confirmed.', action_type: 'erp_sync_done',
-      }).select('id');
-      const timelineInsertError = getMutationError(timelineInsert, 'Order history could not be updated after ERP sync.');
-      if (timelineInsertError) throw new Error(timelineInsertError);
-
-      addToast({ type: 'success', title: 'ERP Sync Done', message: `Order ${selected.order_id} synced.` });
-      loadOrders();
-      selectOrder({ ...selected, stage: 'erp_sync_done' });
-    } catch (error) {
-      addToast({
-        type: 'error',
-        title: 'ERP Sync Failed',
-        message: error instanceof Error ? error.message : 'Final ERP sync could not be completed.',
       });
     }
   }
@@ -450,7 +414,6 @@ export default function FinalApproval() {
   }
 
   const pending = orders.filter(order => {
-    if (order.stage === 'final_approved') return true;
     if (order.stage !== 'final_approval_pending') return false;
     return currentRole === 'admin' ? true : order.my_final_approval?.status === 'pending';
   });
@@ -459,8 +422,7 @@ export default function FinalApproval() {
   const visibleRCs = currentRole === 'admin' ? rcs : rcs.filter(rc => rc.myApproval?.status === 'pending');
 
   const canAct    = currentRole === 'final_approver' && selected?.stage === 'final_approval_pending' && myApproval?.status === 'pending';
-  const canEdit   = (currentRole === 'final_approver' || currentRole === 'admin') && selected?.stage === 'final_approval_pending';
-  const canERPSync = currentRole === 'final_approver' && selected?.stage === 'final_approved';
+  const canEdit   = false;
   const canActRC  = currentRole === 'final_approver' && selectedRC?.myApproval?.status === 'pending';
   const totalValue = items.reduce((s, i) => s + ((i.final_quantity ?? i.quantity) * (i.final_price ?? i.unit_price)), 0);
 
@@ -473,7 +435,7 @@ export default function FinalApproval() {
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-[18px] font-bold text-ink-900 tracking-tight">Final Approval</h1>
-          <p className="text-sm text-ink-400 mt-0.5">Last correction point before orders become executable</p>
+          <p className="text-sm text-ink-400 mt-0.5">Final checkpoint before an order is approved or rejected</p>
         </div>
         <div className="flex gap-1 bg-slate-100 p-1 rounded-lg">
           <button
@@ -501,8 +463,8 @@ export default function FinalApproval() {
       <div className="grid grid-cols-4 gap-3">
         {[
           { label: 'Awaiting Approval', value: orders.filter(o => o.stage === 'final_approval_pending').length, color: 'text-brand-orange' },
-          { label: 'Final Approved',    value: orders.filter(o => o.stage === 'final_approved').length,         color: 'text-emerald-600' },
-          { label: 'ERP Sync Done',     value: orders.filter(o => o.stage === 'erp_sync_done').length,          color: 'text-brand-blue' },
+          { label: 'Approved',          value: orders.filter(o => o.stage === 'final_approved').length,         color: 'text-emerald-600' },
+          { label: 'Closed',            value: orders.filter(o => o.stage === 'completed').length,              color: 'text-brand-blue' },
           { label: 'Rejected',          value: orders.filter(o => o.stage === 'final_rejected').length,         color: 'text-red-500' },
         ].map(s => (
           <div key={s.label} className="bg-white rounded-xl border border-slate-100 shadow-card p-4">
@@ -708,19 +670,8 @@ export default function FinalApproval() {
                   </div>
                 )}
 
-                {/* ERP sync done confirmation */}
-                {selected.stage === 'erp_sync_done' && (
-                  <div className="mx-5 mb-4 flex items-start gap-3 p-4 bg-blue-50 border border-blue-100 rounded-xl">
-                    <Database size={16} className="text-brand-blue shrink-0 mt-0.5" />
-                    <div>
-                      <p className="text-sm font-semibold text-blue-800">Final ERP Sync Done</p>
-                      <p className="text-xs text-blue-600 mt-0.5">This order has been confirmed as synced to ERP.</p>
-                    </div>
-                  </div>
-                )}
-
                 {/* Spacer so content isn't hidden behind sticky footer */}
-                {(canAct || canERPSync) && <div className="h-20" />}
+                {canAct && <div className="h-20" />}
               </div>
 
               {/* ── Sticky footer ── */}
@@ -731,14 +682,6 @@ export default function FinalApproval() {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  {canERPSync && (
-                    <button
-                      onClick={handleERPFinalSync}
-                      className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold bg-brand-blue hover:bg-brand-blue-dark text-white rounded-xl transition-colors shadow-sm"
-                    >
-                      <Database size={14} /> Mark ERP Sync Done
-                    </button>
-                  )}
                   {canAct && (
                     <>
                       <button

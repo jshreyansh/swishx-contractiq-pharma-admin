@@ -35,23 +35,46 @@ const SLA_META: Record<string, { role: string; color: string; icon: string; desc
   },
 };
 
-const ALL_PERM_ROLES = [
-  { key: 'cfa',      label: 'CFA / CNF',         badge: 'bg-warning-100 text-warning-700' },
-  { key: 'division', label: 'Division Approver',  badge: 'bg-success-100 text-success-700' },
-  { key: 'final',    label: 'Final Approver',     badge: 'bg-blue-100 text-blue-700' },
+const DIVISION_PERMISSION_ACTIONS = [
+  { key: 'approve', label: 'Approve', desc: 'Clear the order or RC for the next stage', defaultValue: true },
+  { key: 'reject', label: 'Reject', desc: 'Send the request back or stop it', defaultValue: true },
+  { key: 'edit_items', label: 'Edit', desc: 'Adjust quantities or pricing during review', defaultValue: true },
+  { key: 'delete_items', label: 'Delete Items', desc: 'Remove lines before taking a decision', defaultValue: true },
 ];
 
-const RC_PERM_ROLES = ALL_PERM_ROLES.filter(r => r.key !== 'cfa');
-
-const PERM_ACTIONS = [
-  { key: 'edit_items',   label: 'Edit Items',   desc: 'Adjust price / qty' },
-  { key: 'delete_items', label: 'Delete Items', desc: 'Remove line items' },
-  { key: 'approve',      label: 'Approve',      desc: 'Approve or reject' },
+const FINAL_PERMISSION_ACTIONS = [
+  { key: 'approve', label: 'Accept', desc: 'Final acceptance at the last checkpoint', defaultValue: true },
+  { key: 'reject', label: 'Reject', desc: 'Final rejection at the last checkpoint', defaultValue: true },
 ];
 
-const PERM_RESOURCES = [
-  { key: 'order', label: 'Orders',         icon: FileText,   roles: ALL_PERM_ROLES },
-  { key: 'rc',    label: 'Rate Contracts', icon: ScrollText, roles: RC_PERM_ROLES  },
+const PERMISSION_RESOURCES = [
+  {
+    key: 'order',
+    label: 'Orders',
+    icon: FileText,
+    roles: [
+      { key: 'division', label: 'Division Approver', badge: 'bg-success-100 text-success-700', actions: DIVISION_PERMISSION_ACTIONS },
+      { key: 'final', label: 'Final Approver', badge: 'bg-blue-100 text-blue-700', actions: FINAL_PERMISSION_ACTIONS },
+    ],
+  },
+  {
+    key: 'rc',
+    label: 'Rate Contracts',
+    icon: ScrollText,
+    roles: [
+      { key: 'division', label: 'Division Approver', badge: 'bg-success-100 text-success-700', actions: DIVISION_PERMISSION_ACTIONS },
+      { key: 'final', label: 'Final Approver', badge: 'bg-blue-100 text-blue-700', actions: FINAL_PERMISSION_ACTIONS },
+    ],
+  },
+];
+
+const WORKFLOW_RULES = [
+  {
+    key: 'workflow_reportee_manager_auto_approval',
+    label: 'Reportee Manager Auto Approval',
+    description: 'Orders created by ASM / RSM / GM / Director auto-clear the reporting-manager layer and move straight into division review for the demo.',
+    defaultValue: true,
+  },
 ];
 
 function permKey(role: string, resource: string, action: string) {
@@ -148,9 +171,19 @@ export default function Config() {
     return getConfig(key)?.config_value ?? '';
   }
 
+  function getBooleanConfig(key: string, defaultValue = false) {
+    const value = getVal(key);
+    if (!value) return defaultValue;
+    return value === 'true';
+  }
+
   // ── Persist a single config value ──────────────────────────────────────────
 
-  async function saveConfig(key: string, value: string) {
+  async function saveConfig(
+    key: string,
+    value: string,
+    meta?: { configType?: string; label?: string; description?: string }
+  ) {
     const existing = getConfig(key);
     if (existing) {
       const { error } = await supabase.from('system_config').update({
@@ -163,9 +196,9 @@ export default function Config() {
       const { error } = await supabase.from('system_config').insert({
         config_key: key,
         config_value: value,
-        config_type: 'text',
-        label: key,
-        description: '',
+        config_type: meta?.configType || 'text',
+        label: meta?.label || key,
+        description: meta?.description || '',
         updated_by: 'Admin',
       });
       if (error) throw error;
@@ -187,13 +220,33 @@ export default function Config() {
 
   // ── Permission toggle ──────────────────────────────────────────────────────
 
-  async function togglePerm(key: string, newValue: boolean) {
+  async function togglePerm(key: string, newValue: boolean, label: string, description: string) {
     setPermSaving(key);
     try {
-      await saveConfig(key, newValue ? 'true' : 'false');
+      await saveConfig(key, newValue ? 'true' : 'false', {
+        configType: 'boolean',
+        label,
+        description,
+      });
       addToast({ type: 'success', title: 'Permission Updated', message: `Setting saved.` });
     } catch (error: unknown) {
       addToast({ type: 'error', title: 'Save Failed', message: getErrorMessage(error, 'Could not update permission.') });
+    } finally {
+      setPermSaving(null);
+    }
+  }
+
+  async function toggleWorkflowRule(key: string, newValue: boolean, label: string, description: string) {
+    setPermSaving(key);
+    try {
+      await saveConfig(key, newValue ? 'true' : 'false', {
+        configType: 'boolean',
+        label,
+        description,
+      });
+      addToast({ type: 'success', title: 'Workflow Rule Updated', message: 'Demo rule saved.' });
+    } catch (error: unknown) {
+      addToast({ type: 'error', title: 'Save Failed', message: getErrorMessage(error, 'Could not update workflow rule.') });
     } finally {
       setPermSaving(null);
     }
@@ -244,7 +297,8 @@ export default function Config() {
   const generalConfigs = configs.filter(c =>
     !SLA_KEYS.includes(c.config_key) &&
     !EMAIL_KEYS.includes(c.config_key) &&
-    !c.config_key.startsWith('perm_')
+    !c.config_key.startsWith('perm_') &&
+    !WORKFLOW_RULES.some(rule => rule.key === c.config_key)
   );
   const emailConfigs = configs.filter(c => EMAIL_KEYS.includes(c.config_key));
 
@@ -476,64 +530,103 @@ export default function Config() {
           {/* ── Role Permissions ───────────────────────────────────────────────── */}
           <div>
             <div className="flex items-center gap-2 mb-3">
+              <div className="w-7 h-7 bg-slate-100 rounded-lg flex items-center justify-center shrink-0">
+                <Settings size={14} className="text-slate-500" />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold text-ink-900">Demo Workflow Rules</h2>
+                <p className="text-[11px] text-ink-400">Configurable defaults used to tell the updated order story in the demo</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4">
+              {WORKFLOW_RULES.map(rule => {
+                const enabled = getBooleanConfig(rule.key, rule.defaultValue);
+                const saving = permSaving === rule.key;
+                return (
+                  <Card key={rule.key} className="p-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3 className="text-sm font-semibold text-ink-900">{rule.label}</h3>
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">
+                            Default {rule.defaultValue ? 'On' : 'Off'}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-xs text-ink-500">{rule.description}</p>
+                      </div>
+                      <div className={`shrink-0 transition-opacity ${saving ? 'opacity-40 pointer-events-none' : ''}`}>
+                        <Toggle
+                          checked={enabled}
+                          onChange={value => toggleWorkflowRule(rule.key, value, rule.label, rule.description)}
+                        />
+                      </div>
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center gap-2 mb-3">
               <div className="w-7 h-7 bg-blue-100 rounded-lg flex items-center justify-center shrink-0">
                 <ShieldCheck size={14} className="text-blue-700" />
               </div>
               <div>
                 <h2 className="text-sm font-bold text-ink-900">Role Permissions</h2>
-                <p className="text-[11px] text-ink-400">Control what each role can edit or delete in Orders and Rate Contracts</p>
+                <p className="text-[11px] text-ink-400">Division can approve, reject, edit, and delete items. Final can only accept or reject.</p>
               </div>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {PERM_RESOURCES.map(resource => (
+              {PERMISSION_RESOURCES.map(resource => (
                 <Card key={resource.key} padding="none">
-                  {/* Resource header */}
                   <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2">
                     <resource.icon size={14} className="text-ink-400" />
                     <h3 className="text-sm font-semibold text-ink-900">{resource.label}</h3>
                   </div>
 
-                  {/* Column headers */}
-                  <div className="px-4 pt-3 pb-1 grid grid-cols-[1fr_auto_auto_auto] gap-x-6 items-center">
-                    <span className="text-[10px] font-bold text-ink-400 uppercase tracking-wider">Role</span>
-                    {PERM_ACTIONS.map(action => (
-                      <div key={action.key} className="text-center min-w-[64px]">
-                        <div className="text-[10px] font-bold text-ink-400 uppercase tracking-wider">{action.label}</div>
-                        <div className="text-[9px] text-ink-300 mt-0.5">{action.desc}</div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Role rows */}
-                  <div className="divide-y divide-slate-50 pb-2">
+                  <div className="space-y-3 p-4">
                     {resource.roles.map(role => (
-                      <div key={role.key} className="px-4 py-3 grid grid-cols-[1fr_auto_auto_auto] gap-x-6 items-center">
-                        <div>
+                      <div key={role.key} className="rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
+                        <div className="mb-3 flex items-center justify-between gap-3">
                           <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${role.badge}`}>
                             {role.label}
                           </span>
+                          <span className="text-[11px] text-ink-400">
+                            {role.key === 'division' ? 'Editable control point' : 'Decision only'}
+                          </span>
                         </div>
-                        {PERM_ACTIONS.map(action => {
-                          const key = permKey(role.key, resource.key, action.key);
-                          const val = getVal(key) === 'true';
-                          const saving = permSaving === key;
-                          return (
-                            <div key={action.key} className="flex justify-center min-w-[64px]">
-                              <div className={`transition-opacity ${saving ? 'opacity-40 pointer-events-none' : ''}`}>
-                                <Toggle
-                                  checked={val}
-                                  onChange={v => togglePerm(key, v)}
-                                />
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {role.actions.map(action => {
+                            const key = permKey(role.key, resource.key, action.key);
+                            const val = getBooleanConfig(key, action.defaultValue);
+                            const saving = permSaving === key;
+                            const label = `${role.label}: ${action.label} ${resource.label}`;
+                            return (
+                              <div key={action.key} className="rounded-xl border border-white bg-white px-3 py-2.5">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <p className="text-sm font-medium text-ink-900">{action.label}</p>
+                                    <p className="mt-0.5 text-[11px] text-ink-400">{action.desc}</p>
+                                  </div>
+                                  <div className={`shrink-0 transition-opacity ${saving ? 'opacity-40 pointer-events-none' : ''}`}>
+                                    <Toggle
+                                      checked={val}
+                                      onChange={value => togglePerm(key, value, label, action.desc)}
+                                    />
+                                  </div>
+                                </div>
                               </div>
-                            </div>
-                          );
-                        })}
+                            );
+                          })}
+                        </div>
                       </div>
                     ))}
                   </div>
 
-                  {/* Permission legend */}
                   <div className="px-4 py-2.5 border-t border-slate-50 bg-slate-50/60 rounded-b-2xl">
                     <p className="text-[10px] text-ink-400">
                       Changes take effect immediately on new actions. Existing in-progress items are unaffected.

@@ -61,40 +61,40 @@ export default function Dashboard() {
   });
 
   // Pipeline segments
-  const pendingERP    = orders.filter(o => ['pending_erp_entry', 'manager_approved'].includes(o.stage));
-  const erpEntered    = orders.filter(o => o.stage === 'erp_entered');
+  const createdQ      = orders.filter(o => o.stage === 'created');
+  const pendingERP    = orders.filter(o => o.stage === 'pending_erp_entry');
   const divisionQ     = orders.filter(o => ['division_processing', 'division_partially_approved', 'division_partially_rejected'].includes(o.stage));
   const finalQ        = orders.filter(o => o.stage === 'final_approval_pending');
-  const supplyChain   = orders.filter(o => ['final_approved', 'sent_to_supply_chain', 'sent_to_stockist', 'fulfillment_pending'].includes(o.stage));
+  const approved      = orders.filter(o => ['final_approved', 'sent_to_supply_chain', 'sent_to_stockist', 'fulfillment_pending'].includes(o.stage));
   const completed     = orders.filter(o => o.stage === 'completed');
-  const rejected      = orders.filter(o => ['final_rejected', 'erp_sync_failed'].includes(o.stage));
+  const rejected      = orders.filter(o => ['final_rejected', 'division_partially_rejected', 'erp_sync_failed'].includes(o.stage));
   const slaBreached   = orders.filter(o => o.sla_breached);
 
   const totalActive  = orders.filter(o => o.stage !== 'completed').length;
-  const pipelineValue = orders.filter(o => o.stage !== 'completed' && o.stage !== 'final_rejected').reduce((s, o) => s + o.total_value, 0);
+  const pipelineValue = orders.filter(o => !['completed', 'final_rejected', 'division_partially_rejected'].includes(o.stage)).reduce((s, o) => s + o.total_value, 0);
   const needsAction   = pendingERP.length + divisionQ.length + finalQ.length;
   const recentOrders  = orders.slice(0, 8);
 
   // Pipeline bar data
   const pipelineStages = [
-    { label: 'ERP Entry',      count: pendingERP.length,  color: '#FD4B1B',  key: 'pending_erp_entry' },
-    { label: 'ERP Done',       count: erpEntered.length,  color: '#0278FC',  key: 'erp_entered' },
+    { label: 'Created',        count: createdQ.length,    color: '#94A3B8',  key: 'created' },
     { label: 'Division',       count: divisionQ.length,   color: '#6366F1',  key: 'division_processing' },
+    { label: 'CFA / CNF',      count: pendingERP.length,  color: '#FD4B1B',  key: 'pending_erp_entry' },
     { label: 'Final Approval', count: finalQ.length,      color: '#F59E0B',  key: 'final_approval_pending' },
-    { label: 'Supply Chain',   count: supplyChain.length, color: '#10B981',  key: 'sent_to_supply_chain' },
-    { label: 'Completed',      count: completed.length,   color: '#059669',  key: 'completed' },
+    { label: 'Approved',       count: approved.length,    color: '#10B981',  key: 'final_approved' },
+    { label: 'Closed',         count: completed.length,   color: '#059669',  key: 'completed' },
   ];
   const pipelineTotal = pipelineStages.reduce((s, p) => s + p.count, 0) || 1;
 
   const alerts = [
     ...slaBreached.map(o => ({
       id: o.id, type: 'danger' as const,
-      message: `${o.order_id} — SLA breached, ERP entry pending`,
+      message: `${o.order_id} — SLA breached in the CFA / CNF queue`,
       orderId: o.id,
     })),
-    ...orders.filter(o => o.erp_status === 'sync_failed').map(o => ({
+    ...orders.filter(o => ['sync_failed', 'resync_required'].includes(o.erp_status)).map(o => ({
       id: o.id + '-erp', type: 'danger' as const,
-      message: `${o.order_id} — ERP sync failed, manual entry needed`,
+      message: `${o.order_id} — processing exception needs recovery`,
       orderId: o.id,
     })),
     ...divisionQ.filter(o => Date.now() - new Date(o.updated_at).getTime() > 86400000).map(o => ({
@@ -192,7 +192,7 @@ export default function Dashboard() {
           <p className="text-xs text-ink-400 mt-2">orders awaiting your team</p>
           <div className="mt-4 pt-4 border-t border-slate-100 space-y-1.5">
             <div className="flex justify-between text-xs">
-              <span className="text-ink-400">Pending ERP entry</span>
+              <span className="text-ink-400">CFA / CNF processing</span>
               <span className="font-semibold text-ink-700 tabular-nums">{pendingERP.length}</span>
             </div>
             <div className="flex justify-between text-xs">
@@ -216,7 +216,14 @@ export default function Dashboard() {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <CheckCircle size={14} className="text-emerald-500" />
-                <span className="text-sm text-ink-600">Completed</span>
+                <span className="text-sm text-ink-600">Approved</span>
+              </div>
+              <span className="text-sm font-bold text-ink-900 tabular-nums">{approved.length}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <CheckCircle size={14} className="text-brand-blue" />
+                <span className="text-sm text-ink-600">Closed</span>
               </div>
               <span className="text-sm font-bold text-ink-900 tabular-nums">{completed.length}</span>
             </div>
@@ -238,13 +245,6 @@ export default function Dashboard() {
                 {slaBreached.length}
               </span>
             </div>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Truck size={14} className="text-emerald-500" />
-                <span className="text-sm text-ink-600">At Stockist</span>
-              </div>
-              <span className="text-sm font-bold text-ink-900 tabular-nums">{supplyChain.length}</span>
-            </div>
           </div>
         </div>
 
@@ -258,18 +258,23 @@ export default function Dashboard() {
           className="bg-white rounded-2xl border border-slate-100 shadow-card p-4 cursor-pointer hover:shadow-card-hover hover:border-slate-200 transition-all duration-200 group"
         >
           <div className="flex items-start justify-between">
-            <div className="w-9 h-9 bg-orange-50 rounded-xl flex items-center justify-center">
-              <Truck size={17} className="text-brand-orange" />
+            <div>
+              <p className="text-xs font-semibold text-ink-400 uppercase tracking-wide">CFA / CNF Queue</p>
+              <p className="text-2xl font-bold text-ink-900 mt-3 tabular-nums">{pendingERP.length}</p>
+              <p className="text-sm text-ink-500 mt-0.5">Pending Processing</p>
+              <p className="text-xs text-ink-400 mt-1">Orders awaiting post-division processing</p>
             </div>
+            <div className="w-10 h-10 rounded-xl bg-orange-50 flex items-center justify-center group-hover:bg-orange-100 transition-colors">
+              <Truck size={18} className="text-brand-orange" />
+            </div>
+          </div>
+          <div className="mt-4 flex items-center justify-between text-xs text-ink-400">
             <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-md ${pendingERP.length > 0 ? 'bg-orange-50 text-orange-600' : 'bg-slate-100 text-slate-500'}`}>
               {pendingERP.length > 0 ? `${pendingERP.length} pending` : 'Clear'}
             </span>
-          </div>
-          <p className="text-2xl font-bold text-ink-900 mt-3 tabular-nums">{pendingERP.length}</p>
-          <p className="text-sm text-ink-500 mt-0.5">ERP Entry Queue</p>
-          <p className="text-xs text-ink-400 mt-1">Orders awaiting CFA / ERP entry</p>
-          <div className="mt-4 flex items-center gap-1 text-xs font-semibold text-brand-orange group-hover:gap-2 transition-all">
-            Go to CFA Queue <ArrowRight size={11} />
+            <span className="inline-flex items-center gap-1 text-ink-500 group-hover:text-brand-orange transition-colors">
+              Open queue <ArrowRight size={12} />
+            </span>
           </div>
         </div>
 
@@ -278,18 +283,23 @@ export default function Dashboard() {
           className="bg-white rounded-2xl border border-slate-100 shadow-card p-4 cursor-pointer hover:shadow-card-hover hover:border-slate-200 transition-all duration-200 group"
         >
           <div className="flex items-start justify-between">
-            <div className="w-9 h-9 bg-blue-50 rounded-xl flex items-center justify-center">
-              <GitBranch size={17} className="text-brand-blue" />
+            <div>
+              <p className="text-xs font-semibold text-ink-400 uppercase tracking-wide">Division Review</p>
+              <p className="text-2xl font-bold text-ink-900 mt-3 tabular-nums">{divisionQ.length}</p>
+              <p className="text-sm text-ink-500 mt-0.5">Pending Division Action</p>
+              <p className="text-xs text-ink-400 mt-1">Only division approvers can edit, reject, or remove items</p>
             </div>
-            <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-md ${divisionQ.length > 0 ? 'bg-blue-50 text-blue-600' : 'bg-slate-100 text-slate-500'}`}>
-              {divisionQ.length > 0 ? `${divisionQ.length} pending` : 'Clear'}
-            </span>
+            <div className="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center group-hover:bg-indigo-100 transition-colors">
+              <GitBranch size={18} className="text-indigo-600" />
+            </div>
           </div>
-          <p className="text-2xl font-bold text-ink-900 mt-3 tabular-nums">{divisionQ.length}</p>
-          <p className="text-sm text-ink-500 mt-0.5">Division Workspace</p>
-          <p className="text-xs text-ink-400 mt-1">Orders in division-level review</p>
-          <div className="mt-4 flex items-center gap-1 text-xs font-semibold text-brand-blue group-hover:gap-2 transition-all">
-            Go to Division <ArrowRight size={11} />
+          <div className="mt-4 flex items-center justify-between text-xs text-ink-400">
+            <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-md ${divisionQ.length > 0 ? 'bg-indigo-50 text-indigo-600' : 'bg-slate-100 text-slate-500'}`}>
+              {divisionQ.length > 0 ? `${divisionQ.length} active` : 'Clear'}
+            </span>
+            <span className="inline-flex items-center gap-1 text-ink-500 group-hover:text-indigo-600 transition-colors">
+              Open workspace <ArrowRight size={12} />
+            </span>
           </div>
         </div>
 
@@ -298,18 +308,23 @@ export default function Dashboard() {
           className="bg-white rounded-2xl border border-slate-100 shadow-card p-4 cursor-pointer hover:shadow-card-hover hover:border-slate-200 transition-all duration-200 group"
         >
           <div className="flex items-start justify-between">
-            <div className="w-9 h-9 bg-amber-50 rounded-xl flex items-center justify-center">
-              <CheckSquare size={17} className="text-amber-600" />
+            <div>
+              <p className="text-xs font-semibold text-ink-400 uppercase tracking-wide">Final Approval</p>
+              <p className="text-2xl font-bold text-ink-900 mt-3 tabular-nums">{finalQ.length}</p>
+              <p className="text-sm text-ink-500 mt-0.5">Awaiting Final Decision</p>
+              <p className="text-xs text-ink-400 mt-1">Approve-only checkpoint for the final approvers</p>
             </div>
-            <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-md ${finalQ.length > 0 ? 'bg-amber-50 text-amber-600' : 'bg-slate-100 text-slate-500'}`}>
+            <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center group-hover:bg-amber-100 transition-colors">
+              <CheckSquare size={18} className="text-amber-600" />
+            </div>
+          </div>
+          <div className="mt-4 flex items-center justify-between text-xs text-ink-400">
+            <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-md ${finalQ.length > 0 ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-500'}`}>
               {finalQ.length > 0 ? `${finalQ.length} pending` : 'Clear'}
             </span>
-          </div>
-          <p className="text-2xl font-bold text-ink-900 mt-3 tabular-nums">{finalQ.length}</p>
-          <p className="text-sm text-ink-500 mt-0.5">Final Approval</p>
-          <p className="text-xs text-ink-400 mt-1">Orders awaiting final sign-off</p>
-          <div className="mt-4 flex items-center gap-1 text-xs font-semibold text-amber-600 group-hover:gap-2 transition-all">
-            Go to Approvals <ArrowRight size={11} />
+            <span className="inline-flex items-center gap-1 text-ink-500 group-hover:text-amber-700 transition-colors">
+              Open approvals <ArrowRight size={12} />
+            </span>
           </div>
         </div>
 

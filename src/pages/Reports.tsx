@@ -13,7 +13,7 @@ function stageBarColor(stage: string): string {
     return 'bg-success-500';
   if (['final_rejected', 'erp_sync_failed', 'division_partially_rejected'].includes(stage))
     return 'bg-danger-500';
-  if (['pending_erp_entry', 'pending_manager_approval', 'final_approval_pending'].includes(stage))
+  if (['pending_erp_entry', 'final_approval_pending'].includes(stage))
     return 'bg-warning-500';
   return 'bg-brand-blue';
 }
@@ -66,31 +66,31 @@ export default function Reports() {
 
   // ── Computed metrics ──
   const totalOrders     = orders.length;
-  const completedOrders = orders.filter(o => ['completed', 'sent_to_stockist', 'sent_to_supply_chain', 'final_approved', 'erp_sync_done'].includes(o.stage)).length;
-  const rejectedOrders  = orders.filter(o => o.stage === 'final_rejected').length;
+  const completedOrders = orders.filter(o => ['completed', 'final_approved', 'erp_sync_done', 'sent_to_stockist', 'sent_to_supply_chain'].includes(o.stage)).length;
+  const rejectedOrders  = orders.filter(o => ['final_rejected', 'division_partially_rejected'].includes(o.stage)).length;
   const slaBreached     = orders.filter(o => o.sla_breached).length;
   const totalValue      = orders.reduce((sum, o) => sum + o.total_value, 0);
   const avgValue        = totalOrders > 0 ? totalValue / totalOrders : 0;
   const completionRate  = totalOrders > 0 ? Math.round((completedOrders / totalOrders) * 100) : 0;
   const rejectionRate   = totalOrders > 0 ? ((rejectedOrders / totalOrders) * 100).toFixed(1) : '0';
   const inProgressCount = orders.filter(o =>
-    ['erp_entered', 'division_processing', 'division_partially_approved', 'division_partially_rejected', 'final_approval_pending'].includes(o.stage)
+    ['created', 'division_processing', 'division_partially_approved', 'pending_erp_entry', 'final_approval_pending'].includes(o.stage)
   ).length;
 
   // Pipeline funnel
   const funnelStages = [
     { label: 'Total Orders',     count: totalOrders,     color: 'bg-slate-300' },
-    { label: 'ERP Processed',    count: orders.filter(o => !['created','hospital_confirmed','pending_manager_approval','manager_approved','pending_erp_entry'].includes(o.stage)).length, color: 'bg-brand-blue' },
-    { label: 'Division Cleared', count: orders.filter(o => ['final_approval_pending','final_approved','erp_sync_done','final_rejected','sent_to_supply_chain','sent_to_stockist','completed'].includes(o.stage)).length, color: 'bg-brand-blue' },
-    { label: 'Final Approved',   count: orders.filter(o => ['final_approved','erp_sync_done','sent_to_supply_chain','sent_to_stockist','completed'].includes(o.stage)).length, color: 'bg-success-500' },
-    { label: 'Completed',        count: completedOrders, color: 'bg-success-600' },
+    { label: 'Division Review',  count: orders.filter(o => ['division_processing', 'division_partially_approved', 'division_partially_rejected'].includes(o.stage)).length, color: 'bg-brand-blue' },
+    { label: 'CFA / CNF',        count: orders.filter(o => o.stage === 'pending_erp_entry').length, color: 'bg-warning-500' },
+    { label: 'Final Approval',   count: orders.filter(o => o.stage === 'final_approval_pending').length, color: 'bg-brand-blue' },
+    { label: 'Approved',         count: orders.filter(o => ['final_approved', 'completed'].includes(o.stage)).length, color: 'bg-success-500' },
   ].map(s => ({ ...s, pct: totalOrders > 0 ? Math.round((s.count / totalOrders) * 100) : 0 }));
 
   // Stage distribution
   const stageDistribution = [
-    'pending_erp_entry','erp_entered','division_processing','division_partially_approved',
-    'division_partially_rejected','final_approval_pending','final_approved',
-    'final_rejected','erp_sync_done','sent_to_supply_chain','sent_to_stockist','completed',
+    'created', 'division_processing', 'division_partially_approved',
+    'division_partially_rejected', 'pending_erp_entry', 'final_approval_pending',
+    'final_approved', 'final_rejected', 'completed',
   ].map(stage => ({ stage, count: orders.filter(o => o.stage === stage).length }))
     .filter(s => s.count > 0);
   const maxStageCount = Math.max(...stageDistribution.map(s => s.count), 1);
@@ -132,7 +132,7 @@ export default function Reports() {
         <div>
           <h1 className="text-[18px] font-bold text-ink-900 tracking-tight">Reports & Insights</h1>
           <p className="text-sm text-ink-400 mt-0.5">
-            {totalOrders} total orders · {divisions.length} divisions · {orders.filter(o => o.stage === 'final_approval_pending').length} pending final approval
+            {totalOrders} total orders · {divisions.length} divisions · {orders.filter(o => o.stage === 'pending_erp_entry').length} awaiting CFA / CNF processing
           </p>
         </div>
       </div>

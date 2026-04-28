@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, CheckCircle, AlertTriangle, ArrowUpRight, X, XCircle } from 'lucide-react';
+import { CheckCircle, AlertTriangle, ArrowUpRight, X, XCircle } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { Order, Division, Hospital, FieldRep, Stockist } from '../types';
 import { formatINR, stageLabel, stageColor, erpStatusColor, erpStatusLabel, timeAgo } from '../utils/formatters';
-import { ensureDivisionApprovalsForOrder } from '../utils/orderWorkflow';
+import { ensureDivisionApprovalsForOrder, ensureFinalApprovalsForOrder } from '../utils/orderWorkflow';
 import { getMutationError } from '../utils/supabaseWrites';
 import { useApp } from '../context/AppContext';
 import Card from '../components/ui/Card';
@@ -65,44 +65,44 @@ export default function CFAQueue() {
     if (d) setDivisions(d);
   }
 
-  const pending = orders.filter(o => ['pending_erp_entry', 'manager_approved'].includes(o.stage));
-  const failed = orders.filter(o => o.stage === 'erp_sync_failed' || o.erp_status === 'sync_failed');
-  const history = orders.filter(o => ['erp_entered', 'division_processing', 'final_approval_pending', 'final_approved', 'erp_sync_done', 'sent_to_supply_chain', 'sent_to_stockist', 'completed'].includes(o.stage));
+  const pending = orders.filter(o => o.stage === 'pending_erp_entry' && !['sync_failed', 'resync_required'].includes(o.erp_status));
+  const failed = orders.filter(o => o.stage === 'pending_erp_entry' && ['sync_failed', 'resync_required'].includes(o.erp_status));
+  const history = orders.filter(o => ['final_approval_pending', 'final_approved', 'final_rejected', 'completed'].includes(o.stage));
 
   async function handleMarkERP() {
     if (!erpModal || !erpInput.trim() || !currentUser) return;
     try {
-      await ensureDivisionApprovalsForOrder(erpModal.orderId);
+      await ensureFinalApprovalsForOrder(erpModal.orderId);
 
       const orderUpdate = await supabase.from('orders').update({
         erp_status: 'synced',
         erp_order_id: erpInput,
         erp_synced_at: new Date().toISOString(),
-        stage: 'division_processing',
+        stage: 'final_approval_pending',
         updated_at: new Date().toISOString(),
       }).eq('id', erpModal.orderId).select('id');
-      const orderUpdateError = getMutationError(orderUpdate, 'ERP update could not be saved for this order.');
+      const orderUpdateError = getMutationError(orderUpdate, 'The CFA / CNF processing update could not be saved for this order.');
       if (orderUpdateError) throw new Error(orderUpdateError);
 
       const timelineInsert = await supabase.from('order_timeline').insert({
         order_id: erpModal.orderId,
         actor_name: currentUser.name,
-        actor_role: 'CFA',
-        action: `ERP entry completed. ERP ID: ${erpInput}. Sent to Division Workspace.`,
+        actor_role: 'CFA / CNF',
+        action: `CFA / CNF processing completed. Reference ${erpInput}. Sent to final approval.`,
         action_type: 'erp_synced',
       }).select('id');
-      const timelineInsertError = getMutationError(timelineInsert, 'Order history could not be updated after ERP sync.');
+      const timelineInsertError = getMutationError(timelineInsert, 'Order history could not be updated after CFA / CNF processing.');
       if (timelineInsertError) throw new Error(timelineInsertError);
 
-      addToast({ type: 'success', title: 'ERP Marked', message: `Order ${erpModal.orderNum} moved to Division Workspace.` });
+      addToast({ type: 'success', title: 'Processing Completed', message: `Order ${erpModal.orderNum} moved to final approval.` });
       setERPModal(null);
       setErpInput('');
       loadData();
     } catch (error) {
       addToast({
         type: 'error',
-        title: 'ERP Update Failed',
-        message: error instanceof Error ? error.message : 'ERP update could not be completed.',
+        title: 'Processing Update Failed',
+        message: error instanceof Error ? error.message : 'The CFA / CNF processing update could not be completed.',
       });
     }
   }
@@ -112,29 +112,29 @@ export default function CFAQueue() {
     try {
       const orderUpdate = await supabase.from('orders').update({
         erp_status: 'sync_failed',
-        stage: 'erp_sync_failed',
+        stage: 'pending_erp_entry',
         updated_at: new Date().toISOString(),
       }).eq('id', order.id).select('id');
-      const orderUpdateError = getMutationError(orderUpdate, 'ERP failure status could not be saved.');
+      const orderUpdateError = getMutationError(orderUpdate, 'The processing exception could not be saved.');
       if (orderUpdateError) throw new Error(orderUpdateError);
 
       const timelineInsert = await supabase.from('order_timeline').insert({
         order_id: order.id,
         actor_name: currentUser.name,
-        actor_role: 'CFA',
-        action: `ERP sync marked as failed by ${currentUser.name}. Recovery action required.`,
+        actor_role: 'CFA / CNF',
+        action: `Processing exception raised by ${currentUser.name}. Recovery action required.`,
         action_type: 'erp_sync_failed',
       }).select('id');
-      const timelineInsertError = getMutationError(timelineInsert, 'Order history could not be updated for the sync failure.');
+      const timelineInsertError = getMutationError(timelineInsert, 'Order history could not be updated for the processing exception.');
       if (timelineInsertError) throw new Error(timelineInsertError);
 
-      addToast({ type: 'error', title: 'Sync Failed', message: `Order ${order.order_id} marked as ERP sync failed.` });
+      addToast({ type: 'error', title: 'Exception Logged', message: `Order ${order.order_id} was moved to the exception queue.` });
       loadData();
     } catch (error) {
       addToast({
         type: 'error',
         title: 'Update Failed',
-        message: error instanceof Error ? error.message : 'ERP failure update could not be completed.',
+        message: error instanceof Error ? error.message : 'The processing exception could not be recorded.',
       });
     }
   }
@@ -143,31 +143,31 @@ export default function CFAQueue() {
     if (!currentUser) return;
     try {
       const orderUpdate = await supabase.from('orders').update({
-        erp_status: 'resync_required',
+        erp_status: 'pending_sync',
         stage: 'pending_erp_entry',
         updated_at: new Date().toISOString(),
       }).eq('id', order.id).select('id');
-      const orderUpdateError = getMutationError(orderUpdate, 'Retry status could not be saved.');
+      const orderUpdateError = getMutationError(orderUpdate, 'The retry status could not be saved.');
       if (orderUpdateError) throw new Error(orderUpdateError);
 
       const timelineInsert = await supabase.from('order_timeline').insert({
         order_id: order.id,
         actor_name: currentUser.name,
-        actor_role: 'CFA',
-        action: `ERP sync retry initiated. Order returned to pending ERP entry.`,
+        actor_role: 'CFA / CNF',
+        action: 'Processing retry initiated. Order returned to the active CFA / CNF queue.',
         action_type: 'erp_retry',
       }).select('id');
       const timelineInsertError = getMutationError(timelineInsert, 'Order history could not be updated for the retry.');
       if (timelineInsertError) throw new Error(timelineInsertError);
 
-      addToast({ type: 'info', title: 'Retry Initiated', message: `Order ${order.order_id} queued for ERP re-sync.` });
+      addToast({ type: 'info', title: 'Retry Initiated', message: `Order ${order.order_id} returned to the active processing queue.` });
       setSyncFailModal(null);
       loadData();
     } catch (error) {
       addToast({
         type: 'error',
         title: 'Retry Failed',
-        message: error instanceof Error ? error.message : 'ERP retry could not be queued.',
+        message: error instanceof Error ? error.message : 'The processing retry could not be queued.',
       });
     }
   }
@@ -177,31 +177,31 @@ export default function CFAQueue() {
     try {
       const orderUpdate = await supabase.from('orders').update({
         erp_order_id: newErpId,
-        erp_status: 'resync_required',
+        erp_status: 'pending_sync',
         stage: 'pending_erp_entry',
         updated_at: new Date().toISOString(),
       }).eq('id', order.id).select('id');
-      const orderUpdateError = getMutationError(orderUpdate, 'The ERP ID could not be updated.');
+      const orderUpdateError = getMutationError(orderUpdate, 'The processing reference could not be updated.');
       if (orderUpdateError) throw new Error(orderUpdateError);
 
       const timelineInsert = await supabase.from('order_timeline').insert({
         order_id: order.id,
         actor_name: currentUser.name,
-        actor_role: 'CFA',
-        action: `ERP ID updated to ${newErpId} and retry initiated.`,
+        actor_role: 'CFA / CNF',
+        action: `Processing reference updated to ${newErpId} and retry initiated.`,
         action_type: 'erp_retry',
       }).select('id');
-      const timelineInsertError = getMutationError(timelineInsert, 'Order history could not be updated for the ERP retry.');
+      const timelineInsertError = getMutationError(timelineInsert, 'Order history could not be updated for the processing retry.');
       if (timelineInsertError) throw new Error(timelineInsertError);
 
-      addToast({ type: 'info', title: 'ERP Updated & Retry', message: `Order ${order.order_id} updated with new ERP ID and queued for re-sync.` });
+      addToast({ type: 'info', title: 'Reference Updated', message: `Order ${order.order_id} was updated and returned to the active queue.` });
       setSyncFailModal(null);
       loadData();
     } catch (error) {
       addToast({
         type: 'error',
         title: 'Retry Failed',
-        message: error instanceof Error ? error.message : 'ERP retry could not be updated.',
+        message: error instanceof Error ? error.message : 'The processing retry could not be updated.',
       });
     }
   }
@@ -211,7 +211,7 @@ export default function CFAQueue() {
       hospitalId: order.hospital_id,
       stockistId: order.stockist_id,
       repId: order.field_rep_id,
-      notes: `Manually created to replace failed ERP sync for ${order.order_id}`,
+      notes: `Created as an exception order for ${order.order_id}`,
     });
     setCreateModal(true);
   }
@@ -232,13 +232,13 @@ export default function CFAQueue() {
         cfa_user_id: currentUser.id,
         stage: 'division_processing',
         erp_status: 'manual_added',
-        manager_name: 'Manual Entry',
+        manager_name: `${currentUser.name} (Exception Order)`,
         manager_approved_at: new Date().toISOString(),
         total_value: totalValue,
-        notes: `[Manually Created Order] ${params.notes}`,
+        notes: `[Exception Order] ${params.notes}`,
       }).select('id').maybeSingle();
-      const orderInsertError = getMutationError(orderInsert, 'Manual order could not be created.');
-      if (orderInsertError || !orderInsert.data) throw new Error(orderInsertError || 'Manual order could not be created.');
+      const orderInsertError = getMutationError(orderInsert, 'The exception order could not be created.');
+      if (orderInsertError || !orderInsert.data) throw new Error(orderInsertError || 'The exception order could not be created.');
       const createdOrderId = orderInsert.data.id;
 
       const itemInsert = await supabase.from('order_items').insert(
@@ -251,7 +251,7 @@ export default function CFAQueue() {
           status: 'pending',
         }))
       ).select('id');
-      const itemInsertError = getMutationError(itemInsert, 'Manual order items could not be created.');
+      const itemInsertError = getMutationError(itemInsert, 'The exception order items could not be created.');
       if (itemInsertError) throw new Error(itemInsertError);
 
       await ensureDivisionApprovalsForOrder(createdOrderId);
@@ -259,22 +259,22 @@ export default function CFAQueue() {
       const timelineInsert = await supabase.from('order_timeline').insert({
         order_id: createdOrderId,
         actor_name: currentUser.name,
-        actor_role: 'CFA',
-        action: `Manually created order with ${params.items.length} product(s) totalling ${formatINR(totalValue)}. Flagged as manually created.`,
+        actor_role: 'CFA / CNF',
+        action: `Exception order created with ${params.items.length} product(s) totalling ${formatINR(totalValue)}. Routed to division review.`,
         action_type: 'created',
       }).select('id');
-      const timelineInsertError = getMutationError(timelineInsert, 'Manual order history could not be created.');
+      const timelineInsertError = getMutationError(timelineInsert, 'The exception order history could not be created.');
       if (timelineInsertError) throw new Error(timelineInsertError);
 
-      addToast({ type: 'success', title: 'Manual Order Created', message: `Order ${orderId} created and sent to division approval.` });
+      addToast({ type: 'success', title: 'Exception Order Created', message: `Order ${orderId} was created and sent to division review.` });
       setCreateModal(false);
       setManualPrefill(null);
       loadData();
     } catch (error) {
       addToast({
         type: 'error',
-        title: 'Manual Order Failed',
-        message: error instanceof Error ? error.message : 'Manual order could not be created.',
+        title: 'Creation Failed',
+        message: error instanceof Error ? error.message : 'The exception order could not be created.',
       });
     }
   }
@@ -286,14 +286,8 @@ export default function CFAQueue() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-ink-900">CFA / CNF Queue</h1>
-          <p className="text-sm text-ink-500 mt-0.5">ERP punching and order sync workspace</p>
+          <p className="text-sm text-ink-500 mt-0.5">Processing queue after division clearance, plus exception recovery</p>
         </div>
-        <button
-          onClick={() => setCreateModal(true)}
-          className="flex items-center gap-1.5 bg-brand-orange hover:bg-brand-orange-dark text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-        >
-          <Plus size={14} /> Create Manual Order
-        </button>
       </div>
 
       <div className="grid grid-cols-4 gap-4">
@@ -304,7 +298,7 @@ export default function CFAQueue() {
             </div>
             <div>
               <p className="text-xl font-bold text-ink-900">{pending.length}</p>
-              <p className="text-xs text-ink-500">Pending ERP Entry</p>
+              <p className="text-xs text-ink-500">Pending Processing</p>
             </div>
           </div>
         </Card>
@@ -315,7 +309,7 @@ export default function CFAQueue() {
             </div>
             <div>
               <p className="text-xl font-bold text-ink-900">{failed.length}</p>
-              <p className="text-xs text-ink-500">Sync Failed</p>
+              <p className="text-xs text-ink-500">Exceptions</p>
             </div>
           </div>
         </Card>
@@ -326,7 +320,7 @@ export default function CFAQueue() {
             </div>
             <div>
               <p className="text-xl font-bold text-ink-900">{history.length}</p>
-              <p className="text-xs text-ink-500">Synced Orders</p>
+              <p className="text-xs text-ink-500">Processed Orders</p>
             </div>
           </div>
         </Card>
@@ -353,7 +347,7 @@ export default function CFAQueue() {
             {tab === 'pending' ? `Pending (${pending.length})` :
              tab === 'failed' ? (
                <span className="flex items-center gap-1">
-                 Sync Failed
+                 Exceptions
                  {failed.length > 0 && <span className="bg-danger-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center leading-none">{failed.length}</span>}
                </span>
              ) : `History (${history.length})`}
@@ -371,7 +365,7 @@ export default function CFAQueue() {
                 <th className="px-4 py-3 text-left text-xs font-semibold text-ink-500 uppercase">Order ID</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-ink-500 uppercase">Hospital</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-ink-500 uppercase">Stage</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-ink-500 uppercase">ERP Status</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-ink-500 uppercase">Processing Status</th>
                 <th className="px-4 py-3 text-right text-xs font-semibold text-ink-500 uppercase">Value</th>
                 <th className="px-4 py-3 text-right text-xs font-semibold text-ink-500 uppercase">Updated</th>
                 <th className="px-4 py-3"></th>
@@ -379,7 +373,7 @@ export default function CFAQueue() {
             </thead>
             <tbody className="divide-y divide-app-surface-dark">
               {displayOrders.map(order => (
-                <tr key={order.id} className={`hover:bg-app-bg ${order.sla_breached ? 'bg-danger-50/20' : ''} ${order.stage === 'erp_sync_failed' ? 'bg-danger-50/30' : ''}`}>
+                <tr key={order.id} className={`hover:bg-app-bg ${order.sla_breached ? 'bg-danger-50/20' : ''} ${order.erp_status === 'sync_failed' ? 'bg-danger-50/30' : ''}`}>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1.5">
                       <span className="font-mono text-xs font-semibold text-ink-900">{order.order_id}</span>
@@ -399,13 +393,13 @@ export default function CFAQueue() {
                             onClick={() => setERPModal({ orderId: order.id, orderNum: order.order_id })}
                             className="text-xs bg-warning-500 hover:bg-warning-600 text-white px-2.5 py-1 rounded-lg transition-colors"
                           >
-                            Mark ERP
+                            Complete Processing
                           </button>
                           <button
                             onClick={() => handleMarkSyncFailed(order)}
                             className="text-xs bg-white hover:bg-danger-50 border border-danger-200 text-danger-600 px-2.5 py-1 rounded-lg transition-colors"
                           >
-                            Sync Failed
+                            Log Exception
                           </button>
                         </>
                       )}
@@ -427,7 +421,7 @@ export default function CFAQueue() {
               {displayOrders.length === 0 && (
                 <tr>
                   <td colSpan={7} className="py-12 text-center text-ink-300">
-                    {activeTab === 'failed' ? 'No failed sync orders' : 'No orders in this list'}
+                    {activeTab === 'failed' ? 'No processing exceptions' : 'No orders in this list'}
                   </td>
                 </tr>
               )}
@@ -440,7 +434,7 @@ export default function CFAQueue() {
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
           <div className="bg-app-surface rounded-2xl shadow-xl p-6 w-full max-w-sm border border-app-surface-dark">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-base font-bold text-ink-900">Mark ERP Punched</h3>
+              <h3 className="text-base font-bold text-ink-900">Complete CFA / CNF Processing</h3>
               <button onClick={() => setERPModal(null)}><X size={16} className="text-ink-300" /></button>
             </div>
             <p className="text-sm text-ink-700 mb-3">Order: <span className="font-mono font-medium">{erpModal.orderNum}</span></p>
@@ -448,13 +442,13 @@ export default function CFAQueue() {
               type="text"
               value={erpInput}
               onChange={e => setErpInput(e.target.value)}
-              placeholder="Enter ERP Order ID (e.g. ERP-789123)"
+              placeholder="Enter processing reference (e.g. CFA-24018)"
               className="w-full border border-app-surface-dark rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-orange/20 focus:border-brand-orange/40 bg-white text-ink-900"
             />
             <div className="flex gap-2 mt-4">
               <button onClick={() => setERPModal(null)} className="flex-1 py-2 text-sm border border-app-surface-dark rounded-lg text-ink-700 hover:bg-app-bg">Cancel</button>
               <button onClick={handleMarkERP} disabled={!erpInput.trim()} className="flex-1 py-2 text-sm bg-warning-500 text-white rounded-lg hover:bg-warning-600 font-medium disabled:opacity-50">
-                Confirm Sync
+                Move to Final Approval
               </button>
             </div>
           </div>

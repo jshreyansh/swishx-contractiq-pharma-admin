@@ -45,7 +45,7 @@ export default function SyncFailureModal({ order, onClose, onRetry, onEditAndRet
               <AlertCircle size={16} className="text-red-600" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-slate-900">ERP Sync Failed</h3>
+              <h3 className="text-base font-bold text-slate-900">Processing Exception</h3>
               <p className="text-xs text-slate-400 font-mono mt-0.5">{order.order_id}</p>
             </div>
           </div>
@@ -56,7 +56,7 @@ export default function SyncFailureModal({ order, onClose, onRetry, onEditAndRet
 
         <div className="px-6 py-4 space-y-4">
           <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">
-            The ERP sync for order <span className="font-mono font-semibold">{order.order_id}</span> has failed.
+            CFA / CNF processing for order <span className="font-mono font-semibold">{order.order_id}</span> needs recovery.
             Choose a recovery action below.
           </div>
 
@@ -74,8 +74,8 @@ export default function SyncFailureModal({ order, onClose, onRetry, onEditAndRet
                   <RefreshCw size={14} className={action === 'retry' ? 'text-sky-600' : 'text-slate-500'} />
                 </div>
                 <div>
-                  <p className="text-sm font-semibold text-slate-800">Retry Sync</p>
-                  <p className="text-xs text-slate-500 mt-0.5">Re-attempt ERP sync with the same ERP ID</p>
+                  <p className="text-sm font-semibold text-slate-800">Retry Processing</p>
+                  <p className="text-xs text-slate-500 mt-0.5">Re-attempt processing with the same reference</p>
                 </div>
               </div>
               <ChevronRight size={14} className={`transition-transform ${action === 'retry' ? 'rotate-90 text-sky-500' : 'text-slate-300'}`} />
@@ -84,7 +84,7 @@ export default function SyncFailureModal({ order, onClose, onRetry, onEditAndRet
             {action === 'retry' && (
               <div className="ml-4 p-4 bg-sky-50 border border-sky-200 rounded-xl">
                 <div className="flex items-center justify-between mb-3">
-                  <p className="text-xs text-slate-500">Current ERP ID</p>
+                  <p className="text-xs text-slate-500">Current Reference</p>
                   <span className="font-mono text-sm font-semibold text-slate-800">{order.erp_order_id || '—'}</span>
                 </div>
                 <button
@@ -93,7 +93,7 @@ export default function SyncFailureModal({ order, onClose, onRetry, onEditAndRet
                   className="w-full bg-sky-600 hover:bg-sky-700 text-white text-sm font-medium py-2 rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                 >
                   <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
-                  {loading ? 'Retrying...' : 'Retry Sync Now'}
+                  {loading ? 'Retrying...' : 'Retry Processing Now'}
                 </button>
               </div>
             )}
@@ -109,8 +109,8 @@ export default function SyncFailureModal({ order, onClose, onRetry, onEditAndRet
                   <Edit3 size={14} className={action === 'edit' ? 'text-amber-600' : 'text-slate-500'} />
                 </div>
                 <div>
-                  <p className="text-sm font-semibold text-slate-800">Edit ERP Details &amp; Retry</p>
-                  <p className="text-xs text-slate-500 mt-0.5">Correct the ERP ID and re-attempt sync</p>
+                  <p className="text-sm font-semibold text-slate-800">Edit Reference &amp; Retry</p>
+                  <p className="text-xs text-slate-500 mt-0.5">Correct the processing reference and retry</p>
                 </div>
               </div>
               <ChevronRight size={14} className={`transition-transform ${action === 'edit' ? 'rotate-90 text-amber-500' : 'text-slate-300'}`} />
@@ -119,12 +119,12 @@ export default function SyncFailureModal({ order, onClose, onRetry, onEditAndRet
             {action === 'edit' && (
               <div className="ml-4 p-4 bg-amber-50 border border-amber-200 rounded-xl space-y-3">
                 <div>
-                  <label className="text-xs font-medium text-slate-600 block mb-1">ERP Order ID</label>
+                  <label className="text-xs font-medium text-slate-600 block mb-1">Processing Reference</label>
                   <input
                     type="text"
                     value={erpInput}
                     onChange={e => setErpInput(e.target.value)}
-                    placeholder="e.g. ERP-789123"
+                    placeholder="e.g. CFA-24018"
                     autoFocus
                     className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-400 font-mono"
                   />
@@ -135,7 +135,7 @@ export default function SyncFailureModal({ order, onClose, onRetry, onEditAndRet
                   className="w-full bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium py-2 rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                 >
                   <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
-                  {loading ? 'Saving...' : 'Save & Retry Sync'}
+                  {loading ? 'Saving...' : 'Save & Retry'}
                 </button>
               </div>
             )}
@@ -151,8 +151,8 @@ export default function SyncFailureModal({ order, onClose, onRetry, onEditAndRet
                   <FilePlus size={14} className={action === 'manual' ? 'text-emerald-600' : 'text-slate-500'} />
                 </div>
                 <div>
-                  <p className="text-sm font-semibold text-slate-800">Create Manual Order</p>
-                  <p className="text-xs text-slate-500 mt-0.5">Skip ERP sync and create a manual order in the system</p>
+                  <p className="text-sm font-semibold text-slate-800">Create Exception Order</p>
+                  <p className="text-xs text-slate-500 mt-0.5">Skip automated processing and create an exception order</p>
                 </div>
               </div>
               <ChevronRight size={14} className={`transition-transform ${action === 'manual' ? 'rotate-90 text-emerald-500' : 'text-slate-300'}`} />
@@ -161,21 +161,21 @@ export default function SyncFailureModal({ order, onClose, onRetry, onEditAndRet
             {action === 'manual' && (
               <div className="ml-4 p-4 bg-emerald-50 border border-emerald-200 rounded-xl">
                 <div className="mb-3 space-y-1 text-xs text-slate-600">
-                  <p>A new manual order will be created with the following details pre-filled:</p>
+                  <p>A new exception order will be created with the following details pre-filled:</p>
                   <ul className="mt-2 space-y-0.5 text-slate-500">
                     <li>• Hospital: <span className="font-medium text-slate-700">{order.hospital?.name}</span></li>
                     <li>• Stockist: <span className="font-medium text-slate-700">{order.stockist?.name}</span></li>
                     <li>• Value: <span className="font-medium text-slate-700">{formatINR(order.total_value)}</span></li>
                   </ul>
                   <p className="mt-2 text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">
-                    The manual order will be flagged as "Manually Created" and enter the normal approval workflow.
+                    The exception order will be flagged and routed into division review.
                   </p>
                 </div>
                 <button
                   onClick={handleManual}
                   className="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium py-2 rounded-lg transition-colors flex items-center justify-center gap-2"
                 >
-                  <FilePlus size={13} /> Open Manual Order Form
+                  <FilePlus size={13} /> Open Exception Order Form
                 </button>
               </div>
             )}

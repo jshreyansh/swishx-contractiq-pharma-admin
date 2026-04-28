@@ -11,6 +11,8 @@ import { syncOrderStageAfterDivisionDecision } from '../utils/orderWorkflow';
 import { getMutationError } from '../utils/supabaseWrites';
 import { useApp } from '../context/AppContext';
 import Badge from '../components/ui/Badge';
+import NotesDocumentsPanel from '../components/ui/NotesDocumentsPanel';
+import { getDemoOrderDocuments, getDemoRateContractDocuments } from '../utils/demoDocuments';
 
 interface OrderWithDivision extends Order {
   my_approval?: DivisionApproval;
@@ -521,6 +523,8 @@ export default function DivisionWorkspace() {
 
   const activeItems  = (selected?.my_items || []).filter(i => i.status !== 'removed');
   const removedItems = (selected?.my_items || []).filter(i => i.status === 'removed');
+  const selectedOrderDocuments = selected ? getDemoOrderDocuments(selected.order_id) : [];
+  const selectedRCDocuments = selectedRC ? getDemoRateContractDocuments(selectedRC.rc_code) : [];
 
   // Height of the two-panel section: viewport minus header (56px) + main padding (48px) + top content (~180px)
   const PANEL_HEIGHT = 'calc(100vh - 284px)';
@@ -687,6 +691,13 @@ export default function DivisionWorkspace() {
 
               {/* Scrollable content area */}
               <div ref={detailScrollRef} className="flex-1 overflow-y-auto">
+                <div className="px-5 pt-4">
+                  <NotesDocumentsPanel
+                    notes={selected.notes}
+                    documents={selectedOrderDocuments}
+                    compact
+                  />
+                </div>
 
                 {/* Items table */}
                 <table className="w-full text-sm" style={{ minWidth: '520px' }}>
@@ -920,6 +931,13 @@ export default function DivisionWorkspace() {
                 )}
 
                 <div className="flex-1 overflow-y-auto">
+                  <div className="px-5 pt-4">
+                    <NotesDocumentsPanel
+                      notes={selectedRC.notes}
+                      documents={selectedRCDocuments}
+                      compact
+                    />
+                  </div>
                   <table className="w-full text-sm">
                     <thead className="sticky top-0 bg-slate-50 z-10 border-b border-slate-100">
                       <tr>

@@ -13,11 +13,10 @@ import EmptyState from '../components/ui/EmptyState';
 import { SkeletonTable } from '../components/ui/SkeletonLoader';
 
 const STAGES: OrderStage[] = [
-  'created', 'hospital_confirmed', 'pending_manager_approval', 'manager_approved',
-  'pending_erp_entry', 'erp_entered', 'division_processing',
+  'created', 'hospital_confirmed',
+  'pending_erp_entry', 'division_processing',
   'division_partially_approved', 'division_partially_rejected',
-  'final_approval_pending', 'final_approved', 'final_rejected',
-  'sent_to_supply_chain', 'sent_to_stockist', 'fulfillment_pending', 'completed'
+  'final_approval_pending', 'final_approved', 'final_rejected', 'completed'
 ];
 
 export default function OrdersList() {
@@ -207,7 +206,7 @@ export default function OrdersList() {
                   <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider whitespace-nowrap">Field Rep</th>
                   <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider">Stockist</th>
                   <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider">Stage</th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider whitespace-nowrap">ERP Status</th>
+                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider whitespace-nowrap">Processing Status</th>
                   <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider whitespace-nowrap">Order Type</th>
                   <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider whitespace-nowrap">Rate Contract</th>
                   <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-ink-400 uppercase tracking-wider whitespace-nowrap">Value</th>
